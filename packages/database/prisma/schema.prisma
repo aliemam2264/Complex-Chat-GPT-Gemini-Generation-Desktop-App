@@ -1,0 +1,155 @@
+generator client {
+  provider = "prisma-client"
+  output   = "../generated/prisma"
+}
+
+datasource db {
+  provider = "sqlite"
+}
+
+enum AssetType {
+  ORIGINAL
+  GENERATED
+}
+
+enum PreserveMode {
+  STRICT
+  BALANCED
+  CREATIVE
+}
+
+enum GenerationStatus {
+  PENDING
+  PROMPTING
+  PROMPT_READY
+  GENERATING
+  DOWNLOADING
+  COMPLETED
+  FAILED
+  CANCELED
+}
+
+enum ProviderType {
+  LOCAL
+  CHATGPT_BROWSER
+  GEMINI_BROWSER
+  OPENAI_API
+  GEMINI_API
+}
+
+model Project {
+  id          String  @id @default(cuid())
+  name        String
+  description String?
+
+  imageSessions ImageSession[]
+  generations  GenerationRun[]
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([createdAt])
+}
+
+model ImageSession {
+  id String @id @default(cuid())
+
+  projectId String
+  project   Project @relation(fields: [projectId], references: [id], onDelete: Cascade)
+
+  name String
+
+  assets      Asset[]
+  generations GenerationRun[]
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([projectId])
+}
+
+model Asset {
+  id String @id @default(cuid())
+
+  imageSessionId String
+  imageSession   ImageSession @relation(fields: [imageSessionId], references: [id], onDelete: Cascade)
+
+  type AssetType
+
+  // null = Original image
+  // Has value = Generated from another asset/version
+  parentAssetId String?
+
+  parentAsset Asset?  @relation("AssetVersionTree", fields: [parentAssetId], references: [id], onDelete: SetNull)
+  children    Asset[] @relation("AssetVersionTree")
+
+  filePath String
+  fileName String
+  mimeType String
+
+  width  Int?
+  height Int?
+
+  // This asset can be used as the source of many generations.
+  generationSource GenerationRun[] @relation("GenerationSource")
+
+  // A generated asset belongs to at most one generation run.
+  generationOutput GenerationRun? @relation("GenerationOutput")
+
+  createdAt DateTime @default(now())
+
+  @@index([imageSessionId])
+  @@index([parentAssetId])
+  @@index([type])
+}
+
+model GenerationRun {
+  id String @id @default(cuid())
+
+  projectId String
+  project   Project @relation(fields: [projectId], references: [id], onDelete: Cascade)
+
+  imageSessionId String
+  imageSession   ImageSession @relation(fields: [imageSessionId], references: [id], onDelete: Cascade)
+
+  sourceAssetId String
+  sourceAsset   Asset @relation("GenerationSource", fields: [sourceAssetId], references: [id])
+
+  outputAssetId String? @unique
+  outputAsset   Asset? @relation("GenerationOutput", fields: [outputAssetId], references: [id])
+
+  userInstruction String
+  refinedPrompt   String?
+
+  preserveMode           PreserveMode @default(STRICT)
+  preserveEverythingElse Boolean      @default(true)
+
+  promptRevision Int @default(0)
+
+  promptProvider ProviderType?
+  imageProvider  ProviderType?
+
+  status GenerationStatus @default(PENDING)
+
+  progressStage   String?
+  progressMessage String?
+
+  errorMessage String?
+
+  attemptCount Int       @default(0)
+  lastAttemptAt DateTime?
+
+  cancelRequestedAt DateTime?
+  canceledAt        DateTime?
+
+  startedAt   DateTime?
+  completedAt DateTime?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([projectId])
+  @@index([imageSessionId])
+  @@index([sourceAssetId])
+  @@index([status])
+}

@@ -1,0 +1,29 @@
+{
+  "name": "@eskander/api",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "tsx watch src/server.ts",
+    "build": "esbuild src/server.ts --bundle --platform=node --target=node22 --format=esm --outfile=dist/server.mjs --external:playwright --external:@prisma/client --external:@prisma/adapter-better-sqlite3 --external:better-sqlite3",
+    "start": "node dist/server.mjs"
+  },
+  "dependencies": {
+    "@eskander/database": "*",
+    "@eskander/providers": "*",
+    "cors": "^2.8.5",
+    "dotenv": "^17.0.0",
+    "express": "^5.1.0",
+    "multer": "^2.2.0",
+    "zod": "^4.0.0"
+  },
+  "devDependencies": {
+    "@types/cors": "^2.8.0",
+    "@types/express": "^5.0.0",
+    "@types/multer": "^2.2.0",
+    "@types/node": "^24.0.0",
+    "esbuild": "^0.25.9",
+    "tsx": "^4.20.0",
+    "typescript": "^5.9.0"
+  }
+}

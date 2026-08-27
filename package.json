@@ -1,0 +1,49 @@
+{
+  "name": "eskander-plus-studio",
+  "productName": "Eskander Plus Studio",
+  "version": "0.1.0",
+  "description": "Local-first AI image editing studio.",
+  "author": "Eskander Plus Studio",
+  "private": true,
+  "main": "apps/desktop/dist/main.js",
+  "workspaces": [
+    "apps/*",
+    "packages/*"
+  ],
+  "scripts": {
+    "dev": "concurrently -k -n WEB,API,DESKTOP \"npm run dev:web\" \"npm run dev:api\" \"npm run dev:desktop\"",
+    "dev:web": "npm run dev --workspace=@eskander/web",
+    "dev:api": "cross-env DATABASE_URL=file:../../storage/eskander-dev.sqlite npm run dev --workspace=@eskander/api",
+    "dev:desktop": "npm run dev --workspace=@eskander/desktop",
+    "db:generate": "npm run db:generate --workspace=@eskander/database",
+    "db:migrate": "cross-env DATABASE_URL=file:../../storage/eskander-dev.sqlite npm run db:migrate --workspace=@eskander/database",
+    "db:studio": "cross-env DATABASE_URL=file:../../storage/eskander-dev.sqlite npm run db:studio --workspace=@eskander/database",
+    "build:web": "npm run build --workspace=@eskander/web",
+    "build:api": "npm run build --workspace=@eskander/api",
+    "build:desktop": "npm run build --workspace=@eskander/desktop",
+    "build": "npm run db:generate && npm run build:api && npm run build:web && npm run build:desktop",
+    "browser:install": "node scripts/install-playwright-browser.mjs",
+    "runtime:prepare": "node scripts/prepare-runtime.mjs",
+    "package:prepare": "npm run browser:install && npm run build && npm run runtime:prepare && node scripts/validate-package-inputs.mjs",
+    "package:win": "npm run package:prepare && electron-forge package --config forge.config.cjs --platform=win32 --arch=x64",
+    "make:win": "npm run package:prepare && electron-forge make --config forge.config.cjs --platform=win32 --arch=x64",
+    "format": "prettier --write .",
+    "format:check": "prettier --check .",
+    "make:win:clean": "powershell -NoProfile -Command \"Remove-Item -Recurse -Force out -ErrorAction SilentlyContinue; Remove-Item -Recurse -Force packaging -ErrorAction SilentlyContinue\" && npm run make:win"
+  },
+  "dependencies": {
+    "@prisma/adapter-better-sqlite3": "^7.9.1",
+    "@prisma/client": "^7.9.1",
+    "electron-squirrel-startup": "^1.0.1",
+    "playwright": "^1.62.1"
+  },
+  "devDependencies": {
+    "@electron-forge/cli": "^7.8.3",
+    "@electron-forge/maker-squirrel": "^7.8.3",
+    "@electron-forge/plugin-auto-unpack-natives": "^7.8.3",
+    "concurrently": "^9.2.1",
+    "electron": "^43.0.0",
+    "prettier": "^3.9.6",
+    "cross-env": "^7.0.3"
+  }
+}
