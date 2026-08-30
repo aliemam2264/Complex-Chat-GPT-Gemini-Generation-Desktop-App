@@ -4,7 +4,15 @@ import { mkdir, writeFile } from "node:fs/promises";
 import { createServer } from "node:net";
 import { join } from "node:path";
 
-import { app, BrowserWindow, clipboard, dialog, ipcMain, nativeImage, net } from "electron";
+import {
+  app,
+  BrowserWindow,
+  clipboard,
+  dialog,
+  ipcMain,
+  nativeImage,
+  net,
+} from "electron";
 
 // Squirrel lifecycle events only exist in the installed Windows build.
 // Do not load electron-squirrel-startup during local development.
@@ -48,33 +56,36 @@ async function downloadImageBuffer(imageUrl: string) {
   return Buffer.from(await response.arrayBuffer());
 }
 
-ipcMain.handle("image:save", async (_event, imageUrl: string, fileName: string) => {
-  const result = await dialog.showSaveDialog({
-    title: "Save Image",
-    defaultPath: fileName || "eskander-render.png",
-    filters: [
-      {
-        name: "Images",
-        extensions: ["png", "jpg", "jpeg", "webp"],
-      },
-    ],
-  });
+ipcMain.handle(
+  "image:save",
+  async (_event, imageUrl: string, fileName: string) => {
+    const result = await dialog.showSaveDialog({
+      title: "Save Image",
+      defaultPath: fileName || "eskander-render.png",
+      filters: [
+        {
+          name: "Images",
+          extensions: ["png", "jpg", "jpeg", "webp"],
+        },
+      ],
+    });
 
-  if (result.canceled || !result.filePath) {
+    if (result.canceled || !result.filePath) {
+      return {
+        success: false,
+        canceled: true,
+      };
+    }
+
+    const buffer = await downloadImageBuffer(imageUrl);
+    await writeFile(result.filePath, buffer);
+
     return {
-      success: false,
-      canceled: true,
+      success: true,
+      filePath: result.filePath,
     };
-  }
-
-  const buffer = await downloadImageBuffer(imageUrl);
-  await writeFile(result.filePath, buffer);
-
-  return {
-    success: true,
-    filePath: result.filePath,
-  };
-});
+  },
+);
 
 ipcMain.handle("image:copy", async (_event, imageUrl: string) => {
   const buffer = await downloadImageBuffer(imageUrl);
@@ -138,10 +149,18 @@ async function waitForUrl(url: string, timeoutMs = 60_000) {
     await new Promise((resolve) => setTimeout(resolve, 350));
   }
 
-  throw new Error(`Timed out waiting for ${url}${lastError instanceof Error ? `: ${lastError.message}` : ""}`);
+  throw new Error(
+    `Timed out waiting for ${url}${
+      lastError instanceof Error ? `: ${lastError.message}` : ""
+    }`,
+  );
 }
 
-function pipeProcessLogs(child: ChildProcess, log: WriteStream, prefix: string) {
+function pipeProcessLogs(
+  child: ChildProcess,
+  log: WriteStream,
+  prefix: string,
+) {
   child.stdout?.on("data", (chunk: Buffer | string) => {
     const text = chunk.toString();
     log.write(text);
@@ -155,7 +174,19 @@ function pipeProcessLogs(child: ChildProcess, log: WriteStream, prefix: string) 
   });
 }
 
-function spawnNodeRuntime(scriptPath: string, cwd: string, env: NodeJS.ProcessEnv, log: WriteStream, prefix: string) {
+async async function spawnNodeRuntime(
+  scriptPath: string,
+  cwd: string,
+  env: NodeJS.ProcessEnv,
+  log: WriteStream,
+  prefix: string,
+) {
+  console.log(`[${prefix}] Starting runtime`, {
+    executable: process.execPath,
+    scriptPath,
+    cwd,
+  });
+
   const child = spawn(process.execPath, [scriptPath], {
     cwd,
     env: {
@@ -169,11 +200,23 @@ function spawnNodeRuntime(scriptPath: string, cwd: string, env: NodeJS.ProcessEn
 
   pipeProcessLogs(child, log, prefix);
 
+  await new Promise<void>((resolve, reject) => {
+    child.once("spawn", resolve);
+    child.once("error", reject);
+  });
+
+  child.on("error", (error) => {
+    log.write(`\n[error] ${error instanceof Error ? error.stack ?? error.message : String(error)}\n`);
+    console.error(`[${prefix}] Runtime process error:`, error);
+  });
+
   child.on("exit", (code, signal) => {
     log.write(`\n[exit] code=${String(code)} signal=${String(signal)}\n`);
 
     if (!isQuitting) {
-      console.error(`${prefix} exited unexpectedly with code ${String(code)} and signal ${String(signal)}.`);
+      console.error(
+        `${prefix} exited unexpectedly with code ${String(code)} and signal ${String(signal)}.`,
+      );
 
       if (!runtimeFailureShown) {
         runtimeFailureShown = true;
@@ -206,10 +249,14 @@ async function terminateProcess(child: ChildProcess | null) {
 
   if (process.platform === "win32" && child.pid) {
     await new Promise<void>((resolve) => {
-      const killer = spawn("taskkill", ["/pid", String(child.pid), "/T", "/F"], {
-        windowsHide: true,
-        stdio: "ignore",
-      });
+      const killer = spawn(
+        "taskkill",
+        ["/pid", String(child.pid), "/T", "/F"],
+        {
+          windowsHide: true,
+          stdio: "ignore",
+        },
+      );
 
       killer.once("exit", () => resolve());
       killer.once("error", () => resolve());
@@ -220,7 +267,10 @@ async function terminateProcess(child: ChildProcess | null) {
 }
 
 async function stopProductionServices() {
-  await Promise.allSettled([terminateProcess(runtime.webProcess), terminateProcess(runtime.apiProcess)]);
+  await Promise.allSettled([
+    terminateProcess(runtime.webProcess),
+    terminateProcess(runtime.apiProcess),
+  ]);
 
   runtime.webLog?.end();
   runtime.apiLog?.end();
@@ -266,9 +316,9 @@ async function startProductionServices() {
     flags: "a",
   });
 
-  runtime.apiProcess = spawnNodeRuntime(
+  runtime.apiProcess = await spawnNodeRuntime(
     apiEntry,
-    app.getAppPath(),
+    process.resourcesPath,
     {
       NODE_ENV: "production",
       API_HOST: "127.0.0.1",
@@ -284,7 +334,7 @@ async function startProductionServices() {
 
   await waitForUrl(`${apiUrl}/health`);
 
-  runtime.webProcess = spawnNodeRuntime(
+  runtime.webProcess = await spawnNodeRuntime(
     webEntry,
     webRuntimeRoot,
     {

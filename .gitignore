@@ -1,3 +1,6 @@
+.env
+.env.*
+!.env.example
 node_modules/
 apps/*/node_modules/
 .next/
@@ -11,6 +14,4 @@ storage/
 *.sqlite
 *.sqlite-shm
 *.sqlite-wal
-.env.local
 .DS_Store
-.env
