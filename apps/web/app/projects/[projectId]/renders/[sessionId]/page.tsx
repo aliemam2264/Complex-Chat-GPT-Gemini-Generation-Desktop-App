@@ -6,7 +6,7 @@ import { useParams, useRouter } from "next/navigation";
 
 import { useGenerationActivityStore } from "@/stores/use-generation-activity-store";
 
-import { ArrowLeft, Check, Copy, Download, LoaderCircle, Trash2, X } from "lucide-react";
+import { ImagePlus, X, ArrowLeft, Check, Copy, Download, LoaderCircle, Trash2 } from "lucide-react";
 
 import { ProjectSidebar } from "@/components/projects/project-sidebar";
 import { PromptModal } from "@/components/workspace/prompt-modal";
@@ -24,7 +24,33 @@ import { apiGet, getAssetUrl } from "@/lib/api";
 import type { GenerationRun } from "@/types/generation";
 import type { Asset, ImageSession } from "@/types/project";
 
+type ReferenceImageItem = {
+  id: string;
+  file: File;
+  previewUrl: string;
+};
+
 export default function RenderWorkspacePage() {
+  const referenceInputRef = useRef<HTMLInputElement>(null);
+
+  const [referenceImages, setReferenceImages] = useState<ReferenceImageItem[]>([]);
+
+  const [referenceError, setReferenceError] = useState<string | null>(null);
+
+  const referenceImagesRef = useRef<ReferenceImageItem[]>([]);
+
+  useEffect(() => {
+    referenceImagesRef.current = referenceImages;
+  }, [referenceImages]);
+
+  useEffect(() => {
+    return () => {
+      for (const item of referenceImagesRef.current) {
+        URL.revokeObjectURL(item.previewUrl);
+      }
+    };
+  }, []);
+
   const queryClient = useQueryClient();
   const router = useRouter();
 
@@ -187,6 +213,82 @@ export default function RenderWorkspacePage() {
     return `V${index + 1}`;
   }
 
+  function openReferencePicker() {
+    if (referenceImages.length >= 5) {
+      setReferenceError("You can add up to 5 reference images.");
+
+      return;
+    }
+
+    referenceInputRef.current?.click();
+  }
+
+  function handleReferenceImages(files: FileList | null) {
+    if (!files) {
+      return;
+    }
+
+    const incoming = Array.from(files);
+
+    const supportedTypes = new Set(["image/jpeg", "image/png", "image/webp"]);
+
+    const validImages: File[] = [];
+
+    for (const file of incoming) {
+      if (!supportedTypes.has(file.type)) {
+        setReferenceError("Only JPG, PNG and WebP reference images are supported.");
+
+        continue;
+      }
+
+      if (file.size > 50 * 1024 * 1024) {
+        setReferenceError(`${file.name} is larger than 50 MB.`);
+
+        continue;
+      }
+
+      validImages.push(file);
+    }
+
+    const availableSlots = 5 - referenceImages.length;
+
+    if (availableSlots <= 0) {
+      setReferenceError("You can add up to 5 reference images.");
+
+      return;
+    }
+
+    const imagesToAdd = validImages.slice(0, availableSlots);
+
+    if (validImages.length > availableSlots) {
+      setReferenceError("Only the first 5 reference images were added.");
+    } else {
+      setReferenceError(null);
+    }
+
+    const items: ReferenceImageItem[] = imagesToAdd.map((file) => ({
+      id: crypto.randomUUID(),
+      file,
+      previewUrl: URL.createObjectURL(file),
+    }));
+
+    setReferenceImages((current) => [...current, ...items]);
+  }
+
+  function removeReferenceImage(id: string) {
+    setReferenceImages((current) => {
+      const target = current.find((item) => item.id === id);
+
+      if (target) {
+        URL.revokeObjectURL(target.previewUrl);
+      }
+
+      return current.filter((item) => item.id !== id);
+    });
+
+    setReferenceError(null);
+  }
+
   async function handleBuildPrompt() {
     const trimmedInstruction = instruction.trim();
 
@@ -226,12 +328,21 @@ export default function RenderWorkspacePage() {
         preserveMode,
 
         preserveEverythingElse,
+
+        referenceImages: referenceImages.map((item) => item.file),
       });
 
       /*
        * Show the new generation immediately.
        */
       setGeneration(result);
+
+      for (const item of referenceImages) {
+        URL.revokeObjectURL(item.previewUrl);
+      }
+
+      setReferenceImages([]);
+      setReferenceError(null);
 
       /*
        * Start polling:
@@ -629,7 +740,7 @@ export default function RenderWorkspacePage() {
                     </div>
 
                     <div className="flex items-center gap-2">
-                      {(["STRICT", "BALANCED", "CREATIVE"] as const).map((mode) => (
+                      {(["STRICT", "BALANCED", "CREATIVE", "NO_RESTRICTION"] as const).map((mode) => (
                         <button
                           key={mode}
                           type="button"
@@ -641,7 +752,7 @@ export default function RenderWorkspacePage() {
                               : "border-[var(--border)] text-[var(--foreground-muted)] hover:bg-[var(--surface-2)]",
                           ].join(" ")}
                         >
-                          {mode.charAt(0) + mode.slice(1).toLowerCase()}
+                          {mode === "NO_RESTRICTION" ? "No Restriction" : mode.charAt(0) + mode.slice(1).toLowerCase()}
                         </button>
                       ))}
                     </div>
@@ -656,33 +767,109 @@ export default function RenderWorkspacePage() {
                       className="w-full resize-none bg-transparent px-5 py-4 text-sm leading-6 outline-none placeholder:text-[var(--foreground-subtle)]"
                     />
 
+                    <input
+                      ref={referenceInputRef}
+                      type="file"
+                      accept="image/jpeg,image/png,image/webp"
+                      multiple
+                      onChange={(event) => {
+                        handleReferenceImages(event.target.files);
+
+                        event.target.value = "";
+                      }}
+                      className="hidden"
+                    />
+
+                    {referenceImages.length > 0 && (
+                      <div className="border-t border-[var(--border-soft)] px-4 py-3">
+                        <div className="mb-2.5 flex items-center justify-between">
+                          <span className="text-[11px] font-medium text-[var(--foreground-muted)]">
+                            Reference Images
+                          </span>
+
+                          <span className="text-[10px] text-[var(--foreground-subtle)]">
+                            {referenceImages.length}/5
+                          </span>
+                        </div>
+
+                        <div className="flex flex-wrap gap-2">
+                          {referenceImages.map((item) => (
+                            <div
+                              key={item.id}
+                              className="group relative h-[72px] w-[72px] overflow-hidden rounded-xl border border-[var(--border)] bg-[var(--surface-2)]"
+                            >
+                              <img src={item.previewUrl} alt={item.file.name} className="h-full w-full object-cover" />
+
+                              <button
+                                type="button"
+                                onClick={() => removeReferenceImage(item.id)}
+                                aria-label={`Remove ${item.file.name}`}
+                                title="Remove reference"
+                                className="absolute right-1 top-1 flex h-6 w-6 items-center justify-center rounded-md bg-black/75 text-white opacity-0 backdrop-blur-sm transition-opacity group-hover:opacity-100"
+                              >
+                                <X size={13} strokeWidth={2} />
+                              </button>
+                            </div>
+                          ))}
+                        </div>
+                      </div>
+                    )}
+
+                    {referenceError && (
+                      <div className="border-t border-[var(--border-soft)] px-4 py-2.5">
+                        <p className="text-[11px] text-[var(--danger)]">{referenceError}</p>
+                      </div>
+                    )}
+
                     <div className="flex flex-wrap items-center justify-between gap-3 border-t border-[var(--border-soft)] px-4 py-3">
                       {/* Preserve Toggle */}
-                      <button
-                        type="button"
-                        role="switch"
-                        aria-checked={preserveEverythingElse}
-                        onClick={() => setPreserveEverythingElse(!preserveEverythingElse)}
-                        className="flex items-center gap-3 rounded-lg px-2 py-1.5 hover:bg-[var(--surface-2)]"
-                      >
-                        <span
-                          className={[
-                            "relative inline-flex h-5 w-9 shrink-0 items-center rounded-full transition-colors duration-150",
-                            preserveEverythingElse ? "bg-[var(--foreground)]" : "bg-[var(--surface-3)]",
-                          ].join(" ")}
+                      <div className="flex flex-wrap items-center gap-2">
+                        {/* Preserve Everything Else الحالي بالكامل */}
+                        <button
+                          type="button"
+                          role="switch"
+                          aria-checked={preserveMode === "NO_RESTRICTION" ? false : preserveEverythingElse}
+                          onClick={() => setPreserveEverythingElse(!preserveEverythingElse)}
+                          disabled={preserveMode === "NO_RESTRICTION"}
+                          title={preserveMode === "NO_RESTRICTION" ? "Ignored in No Restriction mode" : undefined}
+                          className="flex items-center gap-3 rounded-lg px-2 py-1.5 hover:bg-[var(--surface-2)] disabled:cursor-not-allowed disabled:opacity-35"
                         >
                           <span
                             className={[
-                              "block h-4 w-4 rounded-full transition-transform duration-150",
-                              preserveEverythingElse
-                                ? "translate-x-[18px] bg-[var(--background)]"
-                                : "translate-x-0.5 bg-[var(--foreground-muted)]",
-                            ].join(" ")}
-                          />
-                        </span>
+                              "relative inline-flex h-5 w-9 shrink-0 items-center rounded-full transition-colors duration-150",
 
-                        <span className="text-sm text-[var(--foreground-muted)]">Preserve Everything Else</span>
-                      </button>
+                              preserveMode !== "NO_RESTRICTION" && preserveEverythingElse
+                                ? "bg-[var(--foreground)]"
+                                : "bg-[var(--surface-3)]",
+                            ].join(" ")}
+                          >
+                            <span
+                              className={[
+                                "block h-4 w-4 rounded-full transition-transform duration-150",
+
+                                preserveMode !== "NO_RESTRICTION" && preserveEverythingElse
+                                  ? "translate-x-[18px] bg-[var(--background)]"
+                                  : "translate-x-0.5 bg-[var(--foreground-muted)]",
+                              ].join(" ")}
+                            />
+                          </span>
+
+                          <span className="text-xs text-[var(--foreground-muted)]">Preserve Everything Else</span>
+                        </button>
+
+                        <button
+                          type="button"
+                          onClick={openReferencePicker}
+                          disabled={referenceImages.length >= 5 || createPrompt.isPending}
+                          className="inline-flex items-center gap-2 rounded-lg px-2.5 py-1.5 text-xs text-[var(--foreground-muted)] transition-colors hover:bg-[var(--surface-2)] hover:text-[var(--foreground)] disabled:cursor-not-allowed disabled:opacity-40"
+                        >
+                          <ImagePlus size={15} strokeWidth={1.8} />
+
+                          <span>
+                            {referenceImages.length > 0 ? `References (${referenceImages.length})` : "Add References"}
+                          </span>
+                        </button>
+                      </div>
 
                       <button
                         type="button"

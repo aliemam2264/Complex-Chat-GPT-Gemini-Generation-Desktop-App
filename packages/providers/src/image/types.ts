@@ -1,5 +1,6 @@
 export type ImageGenerationInput = {
   sourceImagePath: string;
+  referenceImagePaths?: string[];
   prompt: string;
   outputDirectory: string;
   signal?: AbortSignal;

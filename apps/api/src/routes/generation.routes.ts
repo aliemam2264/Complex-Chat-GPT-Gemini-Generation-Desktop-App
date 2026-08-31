@@ -1,6 +1,11 @@
 import { Router } from "express";
 
 import { getGenerationSettings, updateGenerationSettings } from "../controllers/generation-settings.controller";
+import {
+  getPromptPresets,
+  resetPromptPreset,
+  updatePromptPreset,
+} from "../controllers/prompt-preset-settings.controller";
 
 import {
   connectChatGPT,
@@ -21,6 +26,12 @@ export const generationRouter = Router();
 generationRouter.get("/settings", getGenerationSettings);
 
 generationRouter.patch("/settings", updateGenerationSettings);
+
+generationRouter.get("/prompt-presets", getPromptPresets);
+
+generationRouter.patch("/prompt-presets/:mode", updatePromptPreset);
+
+generationRouter.delete("/prompt-presets/:mode", resetPromptPreset);
 
 generationRouter.post("/:generationId/cancel", cancelGeneration);
 

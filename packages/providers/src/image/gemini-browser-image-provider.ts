@@ -428,31 +428,38 @@ export class GeminiBrowserImageProvider implements ImageProvider {
     });
   }
 
-  private async waitForUploadToSettle(page: Page) {
-    console.log("[Gemini] Waiting for attachment upload...");
+  private async waitForUploadToSettle(
+    page: Page,
+    baselineAttachmentCount = 0,
+    baselineVisibleImageCount = 0,
+    baselineSendUsable = false,
+    label = "source image",
+  ) {
+    console.log(`[Gemini] Waiting for ${label} attachment upload...`);
 
     /*
-     * Important production behavior:
+     * Gemini's attachment DOM changes frequently. In the current UI the image
+     * can be visibly ready in the composer while the old attachment selectors
+     * report zero items, or while a stale progress element remains mounted.
      *
-     * setInputFiles()/fileChooser.setFiles() resolving already proves that the
-     * browser accepted the local file selection. Gemini may then consume/reset
-     * the <input type="file"> and render the attachment with internal elements
-     * that don't match our selectors.
+     * We therefore combine four independent signals:
+     *  1. known attachment DOM,
+     *  2. a newly visible image thumbnail,
+     *  3. the native file input still holding the file,
+     *  4. a usable Send control / stable composer after file selection.
      *
-     * The old implementation required attachmentCount > 0 OR inputHasFile on
-     * every poll. In packaged Chrome the input is commonly cleared after Gemini
-     * consumes it, so a perfectly successful upload could wait for 60 seconds
-     * and then fail.
-     *
-     * We now prefer explicit attachment evidence, but also accept a stable,
-     * idle Gemini composer after the file selection has already succeeded.
+     * The file chooser / setInputFiles call has already succeeded before this
+     * method runs, so a usable Send control is strong evidence that Gemini has
+     * accepted the attachment even when its private upload DOM is opaque.
      */
     await page.bringToFront().catch(() => undefined);
 
     const startedAt = Date.now();
     const deadline = startedAt + 60_000;
+
     let explicitReadySince: number | null = null;
-    let idleComposerSince: number | null = null;
+    let sendReadySince: number | null = null;
+    let quietComposerSince: number | null = null;
     let sawExplicitAttachment = false;
     let sawLoading = false;
     let lastProgressLogAt = 0;
@@ -460,7 +467,7 @@ export class GeminiBrowserImageProvider implements ImageProvider {
     while (Date.now() < deadline) {
       if (page.isClosed()) {
         throw new Error(
-          "Gemini browser page closed while the source image was uploading.",
+          `Gemini browser page closed while the ${label} was uploading.`,
         );
       }
 
@@ -470,15 +477,11 @@ export class GeminiBrowserImageProvider implements ImageProvider {
 
           const loadingSelectors = [
             ".gem-attachment-content.loading",
+            '.gem-attachment-content [aria-busy="true"]',
             '[class*="attachment"][class*="loading"]',
-            '[class*="upload"][class*="loading"]',
-            '[class*="upload"][class*="progress"]',
             '[data-test-id*="attachment"][aria-busy="true"]',
             '[data-testid*="attachment"][aria-busy="true"]',
-            '[data-test-id*="upload"][aria-busy="true"]',
-            '[data-testid*="upload"][aria-busy="true"]',
-            "mat-progress-bar",
-            '[role="progressbar"]',
+            'images-files-uploader [aria-busy="true"]',
           ];
 
           const attachmentSelectors = [
@@ -500,6 +503,8 @@ export class GeminiBrowserImageProvider implements ImageProvider {
             '[contenteditable="true"][role="textbox"]',
             '[aria-label="Enter a prompt here"]',
             '[aria-label="أدخل طلبًا هنا"]',
+            '[aria-label*="Ask Gemini" i]',
+            '[aria-label*="Gemini" i][contenteditable="true"]',
             "textarea",
           ];
 
@@ -531,11 +536,23 @@ export class GeminiBrowserImageProvider implements ImageProvider {
             Array.from(document.querySelectorAll(selector)).some(isVisible),
           );
 
-          /*
-           * Gemini often clears the native file input immediately after it
-           * consumes the selected file, so inputHasFile is only positive
-           * evidence. A false value is NOT treated as upload failure.
-           */
+          const visibleImageCount = Array.from(
+            document.querySelectorAll<HTMLImageElement>("img"),
+          ).filter((image) => {
+            if (!isVisible(image)) {
+              return false;
+            }
+
+            const rect = image.getBoundingClientRect();
+
+            /*
+             * Ignore tiny icons / tracking images. Attachment thumbnails in
+             * Gemini are materially larger than this. The baseline captured
+             * before file selection protects us from account avatars/logos.
+             */
+            return rect.width >= 32 && rect.height >= 32;
+          }).length;
+
           const inputHasFile = Array.from(
             document.querySelectorAll<HTMLInputElement>('input[type="file"]'),
           ).some((input) => (input.files?.length ?? 0) > 0);
@@ -553,6 +570,7 @@ export class GeminiBrowserImageProvider implements ImageProvider {
           return {
             loadingCount,
             attachmentCount,
+            visibleImageCount,
             inputHasFile,
             composerVisible,
             uploadError,
@@ -561,6 +579,7 @@ export class GeminiBrowserImageProvider implements ImageProvider {
         .catch(() => ({
           loadingCount: 0,
           attachmentCount: 0,
+          visibleImageCount: 0,
           inputHasFile: false,
           composerVisible: false,
           uploadError: false,
@@ -568,30 +587,50 @@ export class GeminiBrowserImageProvider implements ImageProvider {
 
       if (state.uploadError) {
         await this.dumpUploadDebugInfo(page).catch(() => undefined);
-        throw new Error("Gemini reported that the source image upload failed.");
+        throw new Error(`Gemini reported that the ${label} upload failed.`);
       }
 
       if (state.loadingCount > 0) {
         sawLoading = true;
       }
 
-      if (state.attachmentCount > 0 || state.inputHasFile) {
+      const sendUsable = await this.isSendControlUsable(page);
+      const composer = await this.findComposer(page);
+      const composerUsable =
+        state.composerVisible ||
+        (composer ? await composer.isVisible().catch(() => false) : false);
+
+      const newAttachmentDom =
+        state.attachmentCount > baselineAttachmentCount;
+      const newImageThumbnail =
+        state.visibleImageCount > baselineVisibleImageCount;
+
+      if (newAttachmentDom || newImageThumbnail || state.inputHasFile) {
         sawExplicitAttachment = true;
       }
 
       const uploadIdle = state.loadingCount === 0;
-      const explicitAttachmentReady =
-        (state.attachmentCount > 0 || state.inputHasFile) && uploadIdle;
+      const explicitEvidence =
+        newAttachmentDom || newImageThumbnail || state.inputHasFile;
 
-      if (explicitAttachmentReady) {
+      /*
+       * Strongest path: a new attachment / thumbnail exists. If Gemini's Send
+       * control is usable, let that override a stale loading node that remains
+       * mounted after the actual upload has completed.
+       */
+      const explicitReady =
+        explicitEvidence && (uploadIdle || sendUsable);
+
+      if (explicitReady) {
         if (explicitReadySince === null) {
           explicitReadySince = Date.now();
         }
 
-        if (Date.now() - explicitReadySince >= 1_000) {
+        if (Date.now() - explicitReadySince >= 750) {
           console.log(
-            `[Gemini] Attachment upload ready via explicit UI evidence. ` +
-              `attachmentCount=${state.attachmentCount} inputHasFile=${state.inputHasFile}.`,
+            `[Gemini] ${label} ready via attachment evidence. ` +
+              `attachments=${state.attachmentCount} images=${state.visibleImageCount} ` +
+              `inputHasFile=${state.inputHasFile} sendUsable=${sendUsable}.`,
           );
           return;
         }
@@ -600,40 +639,64 @@ export class GeminiBrowserImageProvider implements ImageProvider {
       }
 
       /*
-       * Production fallback:
-       * after setInputFiles() has already succeeded, Gemini may remove/reset the
-       * input and use private attachment DOM. If the page is idle, the composer
-       * is usable and no upload error appeared for a quiet window, continue.
-       *
-       * This is deliberately NOT a blind timeout extension. It handles the
-       * exact case where our old DOM readiness detector could never become true.
+       * Current Gemini UI: attaching an image can enable the blue Send arrow
+       * even though the attachment itself lives in private DOM that none of our
+       * selectors can see. The screenshot from the failing run shows exactly
+       * this state: thumbnail visible + active Send arrow, while the old detector
+       * kept waiting.
        */
-      const elapsed = Date.now() - startedAt;
-      const fallbackEligible =
-        elapsed >= 3_000 && uploadIdle && state.composerVisible;
+      const sendBecameUsable = sendUsable && !baselineSendUsable;
 
-      if (fallbackEligible) {
-        if (idleComposerSince === null) {
-          idleComposerSince = Date.now();
+      if (sendBecameUsable) {
+        if (sendReadySince === null) {
+          sendReadySince = Date.now();
         }
 
-        if (Date.now() - idleComposerSince >= 2_000) {
+        if (Date.now() - sendReadySince >= 750) {
           console.log(
-            `[Gemini] Attachment upload accepted via stable composer fallback. ` +
+            `[Gemini] ${label} ready because the Send control became usable after file selection.`,
+          );
+          return;
+        }
+      } else {
+        sendReadySince = null;
+      }
+
+      const elapsed = Date.now() - startedAt;
+
+      /*
+       * For additional reference images the Send control may already be usable
+       * because the source image is attached. In that case accept a stable
+       * composer after a conservative quiet window. submitPrompt() performs its
+       * own verified send/retry handshake, so this fallback cannot silently mark
+       * the generation successful; it merely stops a false upload timeout.
+       */
+      const quietFallbackEligible =
+        elapsed >= 5_000 && sendUsable && !state.uploadError;
+
+      if (quietFallbackEligible) {
+        if (quietComposerSince === null) {
+          quietComposerSince = Date.now();
+        }
+
+        if (Date.now() - quietComposerSince >= 1_500) {
+          console.log(
+            `[Gemini] ${label} accepted via stable composer/send fallback. ` +
               `explicitAttachmentSeen=${sawExplicitAttachment} loadingSeen=${sawLoading}.`,
           );
           return;
         }
       } else {
-        idleComposerSince = null;
+        quietComposerSince = null;
       }
 
       if (Date.now() - lastProgressLogAt >= 5_000) {
         lastProgressLogAt = Date.now();
         console.log(
-          `[Gemini] Upload state: elapsed=${Math.round(elapsed / 1000)}s ` +
+          `[Gemini] Upload state: label=${label} elapsed=${Math.round(elapsed / 1000)}s ` +
             `loading=${state.loadingCount} attachments=${state.attachmentCount} ` +
-            `inputHasFile=${state.inputHasFile} composerVisible=${state.composerVisible}.`,
+            `images=${state.visibleImageCount} inputHasFile=${state.inputHasFile} ` +
+            `composerUsable=${composerUsable} sendUsable=${sendUsable}.`,
         );
       }
 
@@ -643,9 +706,41 @@ export class GeminiBrowserImageProvider implements ImageProvider {
     await this.dumpUploadDebugInfo(page).catch(() => undefined);
 
     throw new Error(
-      "Gemini source image upload never reached a usable state. " +
-        "The file picker succeeded, but Gemini stayed busy or the composer disappeared.",
+      `Gemini ${label} upload never reached a usable state. ` +
+        "The file picker succeeded, but Gemini never exposed a usable composer/send state.",
     );
+  }
+
+  private async isSendControlUsable(page: Page): Promise<boolean> {
+    const control = await this.findVisibleSendControl(page);
+
+    if (!control) {
+      return false;
+    }
+
+    return control
+      .evaluate((element) => {
+        const html = element as HTMLElement;
+        const ariaDisabled = html.getAttribute("aria-disabled");
+        const disabledAttribute = html.hasAttribute("disabled");
+        const className = (html.getAttribute("class") ?? "").toLowerCase();
+
+        const container = html.closest(
+          '[data-test-id="send-button-container"], [data-testid="send-button-container"]',
+        );
+
+        const containerDisabled =
+          container?.getAttribute("aria-disabled") === "true" ||
+          container?.hasAttribute("disabled") === true;
+
+        return (
+          ariaDisabled !== "true" &&
+          !disabledAttribute &&
+          !containerDisabled &&
+          !className.includes("disabled")
+        );
+      })
+      .catch(() => false);
   }
 
   private async dumpUploadDebugInfo(page: Page) {
@@ -775,8 +870,75 @@ export class GeminiBrowserImageProvider implements ImageProvider {
     return null;
   }
 
-  private async uploadImage(page: Page, imagePath: string) {
-    console.log("[Gemini] Starting image upload...");
+  private async getVisibleAttachmentEvidenceCount(page: Page): Promise<number> {
+    return page
+      .evaluate(() => {
+        const selectors = [
+          ".gem-attachment-content",
+          '[class*="attachment"] img',
+          '[class*="attachment"] [aria-label*="remove" i]',
+          '[data-test-id*="attachment"]',
+          '[data-testid*="attachment"]',
+          '[data-test-id*="uploaded"]',
+          '[data-testid*="uploaded"]',
+          "file-preview",
+          "image-preview",
+          'img[src^="blob:"]',
+        ];
+
+        const isVisible = (element: Element) => {
+          const html = element as HTMLElement;
+          const rect = html.getBoundingClientRect();
+          const style = window.getComputedStyle(html);
+
+          return (
+            rect.width > 0 &&
+            rect.height > 0 &&
+            style.display !== "none" &&
+            style.visibility !== "hidden"
+          );
+        };
+
+        return selectors.reduce(
+          (total, selector) =>
+            total +
+            Array.from(document.querySelectorAll(selector)).filter(isVisible)
+              .length,
+          0,
+        );
+      })
+      .catch(() => 0);
+  }
+
+  private async getVisibleImageEvidenceCount(page: Page): Promise<number> {
+    return page
+      .evaluate(() => {
+        const isVisible = (element: Element) => {
+          const html = element as HTMLElement;
+          const rect = html.getBoundingClientRect();
+          const style = window.getComputedStyle(html);
+
+          return (
+            rect.width >= 32 &&
+            rect.height >= 32 &&
+            style.display !== "none" &&
+            style.visibility !== "hidden"
+          );
+        };
+
+        return Array.from(document.querySelectorAll<HTMLImageElement>("img")).filter(
+          isVisible,
+        ).length;
+      })
+      .catch(() => 0);
+  }
+
+  private async uploadImage(
+    page: Page,
+    imagePath: string,
+    label = "source image",
+  ) {
+    console.log(`[Gemini] Starting ${label} upload...`);
 
     /*
      * A Chromium window parked far off-screen can be treated as occluded by
@@ -785,6 +947,13 @@ export class GeminiBrowserImageProvider implements ImageProvider {
      */
     await page.bringToFront().catch(() => undefined);
     await page.waitForTimeout(1000);
+
+    const [baselineAttachmentCount, baselineVisibleImageCount, baselineSendUsable] =
+      await Promise.all([
+        this.getVisibleAttachmentEvidenceCount(page),
+        this.getVisibleImageEvidenceCount(page),
+        this.isSendControlUsable(page),
+      ]);
 
     const alreadyOpenUploadItem = await this.findExistingUploadMenuItem(page);
 
@@ -806,7 +975,13 @@ export class GeminiBrowserImageProvider implements ImageProvider {
       if (fileChooser) {
         await fileChooser.setFiles(imagePath);
 
-        await this.waitForUploadToSettle(page);
+        await this.waitForUploadToSettle(
+          page,
+          baselineAttachmentCount,
+          baselineVisibleImageCount,
+          baselineSendUsable,
+          label,
+        );
 
         return;
       }
@@ -818,7 +993,13 @@ export class GeminiBrowserImageProvider implements ImageProvider {
       if ((await input.count()) > 0) {
         await input.last().setInputFiles(imagePath);
 
-        await this.waitForUploadToSettle(page);
+        await this.waitForUploadToSettle(
+          page,
+          baselineAttachmentCount,
+          baselineVisibleImageCount,
+          baselineSendUsable,
+          label,
+        );
 
         return;
       }
@@ -834,7 +1015,13 @@ export class GeminiBrowserImageProvider implements ImageProvider {
 
       await existingInput.last().setInputFiles(imagePath);
 
-      await this.waitForUploadToSettle(page);
+      await this.waitForUploadToSettle(
+          page,
+          baselineAttachmentCount,
+          baselineVisibleImageCount,
+          baselineSendUsable,
+          label,
+        );
 
       return;
     }
@@ -932,7 +1119,13 @@ export class GeminiBrowserImageProvider implements ImageProvider {
 
       await inputAfterOpening.last().setInputFiles(imagePath);
 
-      await this.waitForUploadToSettle(page);
+      await this.waitForUploadToSettle(
+          page,
+          baselineAttachmentCount,
+          baselineVisibleImageCount,
+          baselineSendUsable,
+          label,
+        );
 
       return;
     }
@@ -1071,7 +1264,13 @@ export class GeminiBrowserImageProvider implements ImageProvider {
 
       await fileChooser.setFiles(imagePath);
 
-      await this.waitForUploadToSettle(page);
+      await this.waitForUploadToSettle(
+          page,
+          baselineAttachmentCount,
+          baselineVisibleImageCount,
+          baselineSendUsable,
+          label,
+        );
 
       return;
     }
@@ -1090,7 +1289,13 @@ export class GeminiBrowserImageProvider implements ImageProvider {
 
       await dynamicInput.last().setInputFiles(imagePath);
 
-      await this.waitForUploadToSettle(page);
+      await this.waitForUploadToSettle(
+          page,
+          baselineAttachmentCount,
+          baselineVisibleImageCount,
+          baselineSendUsable,
+          label,
+        );
 
       return;
     }
@@ -2420,9 +2625,34 @@ ${prompt}
        */
       console.log("[Gemini] Uploading source image:", input.sourceImagePath);
 
-      await this.uploadImage(page, input.sourceImagePath);
+      await this.uploadImage(page, input.sourceImagePath, "source image");
 
       console.log("[Gemini] Source image uploaded successfully.");
+
+      const referenceImagePaths = input.referenceImagePaths ?? [];
+
+      for (let index = 0; index < referenceImagePaths.length; index += 1) {
+        const referenceImagePath = referenceImagePaths[index];
+
+        if (!referenceImagePath) {
+          continue;
+        }
+
+        console.log(
+          `[Gemini] Uploading reference image ${index + 1}/${referenceImagePaths.length}:`,
+          referenceImagePath,
+        );
+
+        await this.uploadImage(
+          page,
+          referenceImagePath,
+          `reference image ${index + 1}/${referenceImagePaths.length}`,
+        );
+
+        console.log(
+          `[Gemini] Reference image ${index + 1}/${referenceImagePaths.length} uploaded successfully.`,
+        );
+      }
 
       /*
        * Baseline before submitting the generation prompt.
@@ -2457,7 +2687,20 @@ ${prompt}
       /*
        * 5. Send prompt on this independent Gemini chat.
        */
-      await this.submitPrompt(page, input.prompt);
+      const effectivePrompt =
+        referenceImagePaths.length > 0
+          ? `IMAGE ROLES:
+- The FIRST attached image is the SOURCE IMAGE to edit.
+- The next ${referenceImagePaths.length} attached image${referenceImagePaths.length === 1 ? " is" : "s are"} VISUAL REFERENCE IMAGE${referenceImagePaths.length === 1 ? "" : "S"} only.
+- Use the reference image${referenceImagePaths.length === 1 ? "" : "s"} only as guidance relevant to the requested edit.
+- Treat the source image as the edit target. Do not replace it wholesale with a reference image unless the edit request explicitly asks for that.
+- Do not copy unrelated content from the references.
+
+EDIT REQUEST:
+${input.prompt}`
+          : input.prompt;
+
+      await this.submitPrompt(page, effectivePrompt);
 
       /*
        * 6. Wait for this page's generated image.

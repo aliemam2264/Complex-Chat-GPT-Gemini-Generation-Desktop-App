@@ -6,7 +6,7 @@ export type NanoBananaResult = {
   asset: Asset;
 };
 
-export type PreserveMode = "STRICT" | "BALANCED" | "CREATIVE";
+export type PreserveMode = "STRICT" | "BALANCED" | "CREATIVE" | "NO_RESTRICTION";
 
 export type GenerationStatus =
   "PENDING" | "PROMPTING" | "PROMPT_READY" | "GENERATING" | "DOWNLOADING" | "COMPLETED" | "FAILED" | "CANCELED";
@@ -23,7 +23,7 @@ export type GenerationRun = {
   userInstruction: string;
   refinedPrompt: string | null;
 
-  preserveMode: "STRICT" | "BALANCED" | "CREATIVE";
+  preserveMode: PreserveMode;
   preserveEverythingElse: boolean;
 
   promptRevision: number;

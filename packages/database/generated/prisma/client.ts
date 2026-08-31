@@ -61,3 +61,8 @@ export type Asset = Prisma.AssetModel
  * 
  */
 export type GenerationRun = Prisma.GenerationRunModel
+/**
+ * Model GenerationReferenceImage
+ * 
+ */
+export type GenerationReferenceImage = Prisma.GenerationReferenceImageModel

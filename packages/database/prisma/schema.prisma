@@ -16,6 +16,7 @@ enum PreserveMode {
   STRICT
   BALANCED
   CREATIVE
+  NO_RESTRICTION
 }
 
 enum GenerationStatus {
@@ -148,8 +149,26 @@ model GenerationRun {
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
+  referenceImages GenerationReferenceImage[]
+
   @@index([projectId])
   @@index([imageSessionId])
   @@index([sourceAssetId])
   @@index([status])
+}
+
+model GenerationReferenceImage {
+  id              String        @id @default(cuid())
+  generationRunId String
+
+  filePath        String
+  fileName        String
+  mimeType        String
+
+  sortOrder       Int           @default(0)
+  createdAt       DateTime      @default(now())
+
+  generationRun   GenerationRun @relation(fields: [generationRunId], references: [id], onDelete: Cascade)
+
+  @@index([generationRunId])
 }

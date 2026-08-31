@@ -376,6 +376,7 @@ export type GenerationRunWhereInput = {
   imageSession?: Prisma.XOR<Prisma.ImageSessionScalarRelationFilter, Prisma.ImageSessionWhereInput>
   sourceAsset?: Prisma.XOR<Prisma.AssetScalarRelationFilter, Prisma.AssetWhereInput>
   outputAsset?: Prisma.XOR<Prisma.AssetNullableScalarRelationFilter, Prisma.AssetWhereInput> | null
+  referenceImages?: Prisma.GenerationReferenceImageListRelationFilter
 }
 
 export type GenerationRunOrderByWithRelationInput = {
@@ -407,6 +408,7 @@ export type GenerationRunOrderByWithRelationInput = {
   imageSession?: Prisma.ImageSessionOrderByWithRelationInput
   sourceAsset?: Prisma.AssetOrderByWithRelationInput
   outputAsset?: Prisma.AssetOrderByWithRelationInput
+  referenceImages?: Prisma.GenerationReferenceImageOrderByRelationAggregateInput
 }
 
 export type GenerationRunWhereUniqueInput = Prisma.AtLeast<{
@@ -441,6 +443,7 @@ export type GenerationRunWhereUniqueInput = Prisma.AtLeast<{
   imageSession?: Prisma.XOR<Prisma.ImageSessionScalarRelationFilter, Prisma.ImageSessionWhereInput>
   sourceAsset?: Prisma.XOR<Prisma.AssetScalarRelationFilter, Prisma.AssetWhereInput>
   outputAsset?: Prisma.XOR<Prisma.AssetNullableScalarRelationFilter, Prisma.AssetWhereInput> | null
+  referenceImages?: Prisma.GenerationReferenceImageListRelationFilter
 }, "id" | "outputAssetId">
 
 export type GenerationRunOrderByWithAggregationInput = {
@@ -530,6 +533,7 @@ export type GenerationRunCreateInput = {
   imageSession: Prisma.ImageSessionCreateNestedOneWithoutGenerationsInput
   sourceAsset: Prisma.AssetCreateNestedOneWithoutGenerationSourceInput
   outputAsset?: Prisma.AssetCreateNestedOneWithoutGenerationOutputInput
+  referenceImages?: Prisma.GenerationReferenceImageCreateNestedManyWithoutGenerationRunInput
 }
 
 export type GenerationRunUncheckedCreateInput = {
@@ -557,6 +561,7 @@ export type GenerationRunUncheckedCreateInput = {
   completedAt?: Date | string | null
   createdAt?: Date | string
   updatedAt?: Date | string
+  referenceImages?: Prisma.GenerationReferenceImageUncheckedCreateNestedManyWithoutGenerationRunInput
 }
 
 export type GenerationRunUpdateInput = {
@@ -584,6 +589,7 @@ export type GenerationRunUpdateInput = {
   imageSession?: Prisma.ImageSessionUpdateOneRequiredWithoutGenerationsNestedInput
   sourceAsset?: Prisma.AssetUpdateOneRequiredWithoutGenerationSourceNestedInput
   outputAsset?: Prisma.AssetUpdateOneWithoutGenerationOutputNestedInput
+  referenceImages?: Prisma.GenerationReferenceImageUpdateManyWithoutGenerationRunNestedInput
 }
 
 export type GenerationRunUncheckedUpdateInput = {
@@ -611,6 +617,7 @@ export type GenerationRunUncheckedUpdateInput = {
   completedAt?: Prisma.NullableDateTimeFieldUpdateOperationsInput | Date | string | null
   createdAt?: Prisma.DateTimeFieldUpdateOperationsInput | Date | string
   updatedAt?: Prisma.DateTimeFieldUpdateOperationsInput | Date | string
+  referenceImages?: Prisma.GenerationReferenceImageUncheckedUpdateManyWithoutGenerationRunNestedInput
 }
 
 export type GenerationRunCreateManyInput = {
@@ -794,6 +801,11 @@ export type GenerationRunMinOrderByAggregateInput = {
 export type GenerationRunSumOrderByAggregateInput = {
   promptRevision?: Prisma.SortOrder
   attemptCount?: Prisma.SortOrder
+}
+
+export type GenerationRunScalarRelationFilter = {
+  is?: Prisma.GenerationRunWhereInput
+  isNot?: Prisma.GenerationRunWhereInput
 }
 
 export type GenerationRunCreateNestedManyWithoutProjectInput = {
@@ -982,6 +994,20 @@ export type NullableDateTimeFieldUpdateOperationsInput = {
   set?: Date | string | null
 }
 
+export type GenerationRunCreateNestedOneWithoutReferenceImagesInput = {
+  create?: Prisma.XOR<Prisma.GenerationRunCreateWithoutReferenceImagesInput, Prisma.GenerationRunUncheckedCreateWithoutReferenceImagesInput>
+  connectOrCreate?: Prisma.GenerationRunCreateOrConnectWithoutReferenceImagesInput
+  connect?: Prisma.GenerationRunWhereUniqueInput
+}
+
+export type GenerationRunUpdateOneRequiredWithoutReferenceImagesNestedInput = {
+  create?: Prisma.XOR<Prisma.GenerationRunCreateWithoutReferenceImagesInput, Prisma.GenerationRunUncheckedCreateWithoutReferenceImagesInput>
+  connectOrCreate?: Prisma.GenerationRunCreateOrConnectWithoutReferenceImagesInput
+  upsert?: Prisma.GenerationRunUpsertWithoutReferenceImagesInput
+  connect?: Prisma.GenerationRunWhereUniqueInput
+  update?: Prisma.XOR<Prisma.XOR<Prisma.GenerationRunUpdateToOneWithWhereWithoutReferenceImagesInput, Prisma.GenerationRunUpdateWithoutReferenceImagesInput>, Prisma.GenerationRunUncheckedUpdateWithoutReferenceImagesInput>
+}
+
 export type GenerationRunCreateWithoutProjectInput = {
   id?: string
   userInstruction: string
@@ -1006,6 +1032,7 @@ export type GenerationRunCreateWithoutProjectInput = {
   imageSession: Prisma.ImageSessionCreateNestedOneWithoutGenerationsInput
   sourceAsset: Prisma.AssetCreateNestedOneWithoutGenerationSourceInput
   outputAsset?: Prisma.AssetCreateNestedOneWithoutGenerationOutputInput
+  referenceImages?: Prisma.GenerationReferenceImageCreateNestedManyWithoutGenerationRunInput
 }
 
 export type GenerationRunUncheckedCreateWithoutProjectInput = {
@@ -1032,6 +1059,7 @@ export type GenerationRunUncheckedCreateWithoutProjectInput = {
   completedAt?: Date | string | null
   createdAt?: Date | string
   updatedAt?: Date | string
+  referenceImages?: Prisma.GenerationReferenceImageUncheckedCreateNestedManyWithoutGenerationRunInput
 }
 
 export type GenerationRunCreateOrConnectWithoutProjectInput = {
@@ -1113,6 +1141,7 @@ export type GenerationRunCreateWithoutImageSessionInput = {
   project: Prisma.ProjectCreateNestedOneWithoutGenerationsInput
   sourceAsset: Prisma.AssetCreateNestedOneWithoutGenerationSourceInput
   outputAsset?: Prisma.AssetCreateNestedOneWithoutGenerationOutputInput
+  referenceImages?: Prisma.GenerationReferenceImageCreateNestedManyWithoutGenerationRunInput
 }
 
 export type GenerationRunUncheckedCreateWithoutImageSessionInput = {
@@ -1139,6 +1168,7 @@ export type GenerationRunUncheckedCreateWithoutImageSessionInput = {
   completedAt?: Date | string | null
   createdAt?: Date | string
   updatedAt?: Date | string
+  referenceImages?: Prisma.GenerationReferenceImageUncheckedCreateNestedManyWithoutGenerationRunInput
 }
 
 export type GenerationRunCreateOrConnectWithoutImageSessionInput = {
@@ -1190,6 +1220,7 @@ export type GenerationRunCreateWithoutSourceAssetInput = {
   project: Prisma.ProjectCreateNestedOneWithoutGenerationsInput
   imageSession: Prisma.ImageSessionCreateNestedOneWithoutGenerationsInput
   outputAsset?: Prisma.AssetCreateNestedOneWithoutGenerationOutputInput
+  referenceImages?: Prisma.GenerationReferenceImageCreateNestedManyWithoutGenerationRunInput
 }
 
 export type GenerationRunUncheckedCreateWithoutSourceAssetInput = {
@@ -1216,6 +1247,7 @@ export type GenerationRunUncheckedCreateWithoutSourceAssetInput = {
   completedAt?: Date | string | null
   createdAt?: Date | string
   updatedAt?: Date | string
+  referenceImages?: Prisma.GenerationReferenceImageUncheckedCreateNestedManyWithoutGenerationRunInput
 }
 
 export type GenerationRunCreateOrConnectWithoutSourceAssetInput = {
@@ -1251,6 +1283,7 @@ export type GenerationRunCreateWithoutOutputAssetInput = {
   project: Prisma.ProjectCreateNestedOneWithoutGenerationsInput
   imageSession: Prisma.ImageSessionCreateNestedOneWithoutGenerationsInput
   sourceAsset: Prisma.AssetCreateNestedOneWithoutGenerationSourceInput
+  referenceImages?: Prisma.GenerationReferenceImageCreateNestedManyWithoutGenerationRunInput
 }
 
 export type GenerationRunUncheckedCreateWithoutOutputAssetInput = {
@@ -1277,6 +1310,7 @@ export type GenerationRunUncheckedCreateWithoutOutputAssetInput = {
   completedAt?: Date | string | null
   createdAt?: Date | string
   updatedAt?: Date | string
+  referenceImages?: Prisma.GenerationReferenceImageUncheckedCreateNestedManyWithoutGenerationRunInput
 }
 
 export type GenerationRunCreateOrConnectWithoutOutputAssetInput = {
@@ -1335,6 +1369,7 @@ export type GenerationRunUpdateWithoutOutputAssetInput = {
   project?: Prisma.ProjectUpdateOneRequiredWithoutGenerationsNestedInput
   imageSession?: Prisma.ImageSessionUpdateOneRequiredWithoutGenerationsNestedInput
   sourceAsset?: Prisma.AssetUpdateOneRequiredWithoutGenerationSourceNestedInput
+  referenceImages?: Prisma.GenerationReferenceImageUpdateManyWithoutGenerationRunNestedInput
 }
 
 export type GenerationRunUncheckedUpdateWithoutOutputAssetInput = {
@@ -1342,6 +1377,131 @@ export type GenerationRunUncheckedUpdateWithoutOutputAssetInput = {
   projectId?: Prisma.StringFieldUpdateOperationsInput | string
   imageSessionId?: Prisma.StringFieldUpdateOperationsInput | string
   sourceAssetId?: Prisma.StringFieldUpdateOperationsInput | string
+  userInstruction?: Prisma.StringFieldUpdateOperationsInput | string
+  refinedPrompt?: Prisma.NullableStringFieldUpdateOperationsInput | string | null
+  preserveMode?: Prisma.EnumPreserveModeFieldUpdateOperationsInput | $Enums.PreserveMode
+  preserveEverythingElse?: Prisma.BoolFieldUpdateOperationsInput | boolean
+  promptRevision?: Prisma.IntFieldUpdateOperationsInput | number
+  promptProvider?: Prisma.NullableEnumProviderTypeFieldUpdateOperationsInput | $Enums.ProviderType | null
+  imageProvider?: Prisma.NullableEnumProviderTypeFieldUpdateOperationsInput | $Enums.ProviderType | null
+  status?: Prisma.EnumGenerationStatusFieldUpdateOperationsInput | $Enums.GenerationStatus
+  progressStage?: Prisma.NullableStringFieldUpdateOperationsInput | string | null
+  progressMessage?: Prisma.NullableStringFieldUpdateOperationsInput | string | null
+  errorMessage?: Prisma.NullableStringFieldUpdateOperationsInput | string | null
+  attemptCount?: Prisma.IntFieldUpdateOperationsInput | number
+  lastAttemptAt?: Prisma.NullableDateTimeFieldUpdateOperationsInput | Date | string | null
+  cancelRequestedAt?: Prisma.NullableDateTimeFieldUpdateOperationsInput | Date | string | null
+  canceledAt?: Prisma.NullableDateTimeFieldUpdateOperationsInput | Date | string | null
+  startedAt?: Prisma.NullableDateTimeFieldUpdateOperationsInput | Date | string | null
+  completedAt?: Prisma.NullableDateTimeFieldUpdateOperationsInput | Date | string | null
+  createdAt?: Prisma.DateTimeFieldUpdateOperationsInput | Date | string
+  updatedAt?: Prisma.DateTimeFieldUpdateOperationsInput | Date | string
+  referenceImages?: Prisma.GenerationReferenceImageUncheckedUpdateManyWithoutGenerationRunNestedInput
+}
+
+export type GenerationRunCreateWithoutReferenceImagesInput = {
+  id?: string
+  userInstruction: string
+  refinedPrompt?: string | null
+  preserveMode?: $Enums.PreserveMode
+  preserveEverythingElse?: boolean
+  promptRevision?: number
+  promptProvider?: $Enums.ProviderType | null
+  imageProvider?: $Enums.ProviderType | null
+  status?: $Enums.GenerationStatus
+  progressStage?: string | null
+  progressMessage?: string | null
+  errorMessage?: string | null
+  attemptCount?: number
+  lastAttemptAt?: Date | string | null
+  cancelRequestedAt?: Date | string | null
+  canceledAt?: Date | string | null
+  startedAt?: Date | string | null
+  completedAt?: Date | string | null
+  createdAt?: Date | string
+  updatedAt?: Date | string
+  project: Prisma.ProjectCreateNestedOneWithoutGenerationsInput
+  imageSession: Prisma.ImageSessionCreateNestedOneWithoutGenerationsInput
+  sourceAsset: Prisma.AssetCreateNestedOneWithoutGenerationSourceInput
+  outputAsset?: Prisma.AssetCreateNestedOneWithoutGenerationOutputInput
+}
+
+export type GenerationRunUncheckedCreateWithoutReferenceImagesInput = {
+  id?: string
+  projectId: string
+  imageSessionId: string
+  sourceAssetId: string
+  outputAssetId?: string | null
+  userInstruction: string
+  refinedPrompt?: string | null
+  preserveMode?: $Enums.PreserveMode
+  preserveEverythingElse?: boolean
+  promptRevision?: number
+  promptProvider?: $Enums.ProviderType | null
+  imageProvider?: $Enums.ProviderType | null
+  status?: $Enums.GenerationStatus
+  progressStage?: string | null
+  progressMessage?: string | null
+  errorMessage?: string | null
+  attemptCount?: number
+  lastAttemptAt?: Date | string | null
+  cancelRequestedAt?: Date | string | null
+  canceledAt?: Date | string | null
+  startedAt?: Date | string | null
+  completedAt?: Date | string | null
+  createdAt?: Date | string
+  updatedAt?: Date | string
+}
+
+export type GenerationRunCreateOrConnectWithoutReferenceImagesInput = {
+  where: Prisma.GenerationRunWhereUniqueInput
+  create: Prisma.XOR<Prisma.GenerationRunCreateWithoutReferenceImagesInput, Prisma.GenerationRunUncheckedCreateWithoutReferenceImagesInput>
+}
+
+export type GenerationRunUpsertWithoutReferenceImagesInput = {
+  update: Prisma.XOR<Prisma.GenerationRunUpdateWithoutReferenceImagesInput, Prisma.GenerationRunUncheckedUpdateWithoutReferenceImagesInput>
+  create: Prisma.XOR<Prisma.GenerationRunCreateWithoutReferenceImagesInput, Prisma.GenerationRunUncheckedCreateWithoutReferenceImagesInput>
+  where?: Prisma.GenerationRunWhereInput
+}
+
+export type GenerationRunUpdateToOneWithWhereWithoutReferenceImagesInput = {
+  where?: Prisma.GenerationRunWhereInput
+  data: Prisma.XOR<Prisma.GenerationRunUpdateWithoutReferenceImagesInput, Prisma.GenerationRunUncheckedUpdateWithoutReferenceImagesInput>
+}
+
+export type GenerationRunUpdateWithoutReferenceImagesInput = {
+  id?: Prisma.StringFieldUpdateOperationsInput | string
+  userInstruction?: Prisma.StringFieldUpdateOperationsInput | string
+  refinedPrompt?: Prisma.NullableStringFieldUpdateOperationsInput | string | null
+  preserveMode?: Prisma.EnumPreserveModeFieldUpdateOperationsInput | $Enums.PreserveMode
+  preserveEverythingElse?: Prisma.BoolFieldUpdateOperationsInput | boolean
+  promptRevision?: Prisma.IntFieldUpdateOperationsInput | number
+  promptProvider?: Prisma.NullableEnumProviderTypeFieldUpdateOperationsInput | $Enums.ProviderType | null
+  imageProvider?: Prisma.NullableEnumProviderTypeFieldUpdateOperationsInput | $Enums.ProviderType | null
+  status?: Prisma.EnumGenerationStatusFieldUpdateOperationsInput | $Enums.GenerationStatus
+  progressStage?: Prisma.NullableStringFieldUpdateOperationsInput | string | null
+  progressMessage?: Prisma.NullableStringFieldUpdateOperationsInput | string | null
+  errorMessage?: Prisma.NullableStringFieldUpdateOperationsInput | string | null
+  attemptCount?: Prisma.IntFieldUpdateOperationsInput | number
+  lastAttemptAt?: Prisma.NullableDateTimeFieldUpdateOperationsInput | Date | string | null
+  cancelRequestedAt?: Prisma.NullableDateTimeFieldUpdateOperationsInput | Date | string | null
+  canceledAt?: Prisma.NullableDateTimeFieldUpdateOperationsInput | Date | string | null
+  startedAt?: Prisma.NullableDateTimeFieldUpdateOperationsInput | Date | string | null
+  completedAt?: Prisma.NullableDateTimeFieldUpdateOperationsInput | Date | string | null
+  createdAt?: Prisma.DateTimeFieldUpdateOperationsInput | Date | string
+  updatedAt?: Prisma.DateTimeFieldUpdateOperationsInput | Date | string
+  project?: Prisma.ProjectUpdateOneRequiredWithoutGenerationsNestedInput
+  imageSession?: Prisma.ImageSessionUpdateOneRequiredWithoutGenerationsNestedInput
+  sourceAsset?: Prisma.AssetUpdateOneRequiredWithoutGenerationSourceNestedInput
+  outputAsset?: Prisma.AssetUpdateOneWithoutGenerationOutputNestedInput
+}
+
+export type GenerationRunUncheckedUpdateWithoutReferenceImagesInput = {
+  id?: Prisma.StringFieldUpdateOperationsInput | string
+  projectId?: Prisma.StringFieldUpdateOperationsInput | string
+  imageSessionId?: Prisma.StringFieldUpdateOperationsInput | string
+  sourceAssetId?: Prisma.StringFieldUpdateOperationsInput | string
+  outputAssetId?: Prisma.NullableStringFieldUpdateOperationsInput | string | null
   userInstruction?: Prisma.StringFieldUpdateOperationsInput | string
   refinedPrompt?: Prisma.NullableStringFieldUpdateOperationsInput | string | null
   preserveMode?: Prisma.EnumPreserveModeFieldUpdateOperationsInput | $Enums.PreserveMode
@@ -1413,6 +1573,7 @@ export type GenerationRunUpdateWithoutProjectInput = {
   imageSession?: Prisma.ImageSessionUpdateOneRequiredWithoutGenerationsNestedInput
   sourceAsset?: Prisma.AssetUpdateOneRequiredWithoutGenerationSourceNestedInput
   outputAsset?: Prisma.AssetUpdateOneWithoutGenerationOutputNestedInput
+  referenceImages?: Prisma.GenerationReferenceImageUpdateManyWithoutGenerationRunNestedInput
 }
 
 export type GenerationRunUncheckedUpdateWithoutProjectInput = {
@@ -1439,6 +1600,7 @@ export type GenerationRunUncheckedUpdateWithoutProjectInput = {
   completedAt?: Prisma.NullableDateTimeFieldUpdateOperationsInput | Date | string | null
   createdAt?: Prisma.DateTimeFieldUpdateOperationsInput | Date | string
   updatedAt?: Prisma.DateTimeFieldUpdateOperationsInput | Date | string
+  referenceImages?: Prisma.GenerationReferenceImageUncheckedUpdateManyWithoutGenerationRunNestedInput
 }
 
 export type GenerationRunUncheckedUpdateManyWithoutProjectInput = {
@@ -1517,6 +1679,7 @@ export type GenerationRunUpdateWithoutImageSessionInput = {
   project?: Prisma.ProjectUpdateOneRequiredWithoutGenerationsNestedInput
   sourceAsset?: Prisma.AssetUpdateOneRequiredWithoutGenerationSourceNestedInput
   outputAsset?: Prisma.AssetUpdateOneWithoutGenerationOutputNestedInput
+  referenceImages?: Prisma.GenerationReferenceImageUpdateManyWithoutGenerationRunNestedInput
 }
 
 export type GenerationRunUncheckedUpdateWithoutImageSessionInput = {
@@ -1543,6 +1706,7 @@ export type GenerationRunUncheckedUpdateWithoutImageSessionInput = {
   completedAt?: Prisma.NullableDateTimeFieldUpdateOperationsInput | Date | string | null
   createdAt?: Prisma.DateTimeFieldUpdateOperationsInput | Date | string
   updatedAt?: Prisma.DateTimeFieldUpdateOperationsInput | Date | string
+  referenceImages?: Prisma.GenerationReferenceImageUncheckedUpdateManyWithoutGenerationRunNestedInput
 }
 
 export type GenerationRunUncheckedUpdateManyWithoutImageSessionInput = {
@@ -1621,6 +1785,7 @@ export type GenerationRunUpdateWithoutSourceAssetInput = {
   project?: Prisma.ProjectUpdateOneRequiredWithoutGenerationsNestedInput
   imageSession?: Prisma.ImageSessionUpdateOneRequiredWithoutGenerationsNestedInput
   outputAsset?: Prisma.AssetUpdateOneWithoutGenerationOutputNestedInput
+  referenceImages?: Prisma.GenerationReferenceImageUpdateManyWithoutGenerationRunNestedInput
 }
 
 export type GenerationRunUncheckedUpdateWithoutSourceAssetInput = {
@@ -1647,6 +1812,7 @@ export type GenerationRunUncheckedUpdateWithoutSourceAssetInput = {
   completedAt?: Prisma.NullableDateTimeFieldUpdateOperationsInput | Date | string | null
   createdAt?: Prisma.DateTimeFieldUpdateOperationsInput | Date | string
   updatedAt?: Prisma.DateTimeFieldUpdateOperationsInput | Date | string
+  referenceImages?: Prisma.GenerationReferenceImageUncheckedUpdateManyWithoutGenerationRunNestedInput
 }
 
 export type GenerationRunUncheckedUpdateManyWithoutSourceAssetInput = {
@@ -1675,6 +1841,35 @@ export type GenerationRunUncheckedUpdateManyWithoutSourceAssetInput = {
   updatedAt?: Prisma.DateTimeFieldUpdateOperationsInput | Date | string
 }
 
+
+/**
+ * Count Type GenerationRunCountOutputType
+ */
+
+export type GenerationRunCountOutputType = {
+  referenceImages: number
+}
+
+export type GenerationRunCountOutputTypeSelect<ExtArgs extends runtime.Types.Extensions.InternalArgs = runtime.Types.Extensions.DefaultArgs> = {
+  referenceImages?: boolean | GenerationRunCountOutputTypeCountReferenceImagesArgs
+}
+
+/**
+ * GenerationRunCountOutputType without action
+ */
+export type GenerationRunCountOutputTypeDefaultArgs<ExtArgs extends runtime.Types.Extensions.InternalArgs = runtime.Types.Extensions.DefaultArgs> = {
+  /**
+   * Select specific fields to fetch from the GenerationRunCountOutputType
+   */
+  select?: Prisma.GenerationRunCountOutputTypeSelect<ExtArgs> | null
+}
+
+/**
+ * GenerationRunCountOutputType without action
+ */
+export type GenerationRunCountOutputTypeCountReferenceImagesArgs<ExtArgs extends runtime.Types.Extensions.InternalArgs = runtime.Types.Extensions.DefaultArgs> = {
+  where?: Prisma.GenerationReferenceImageWhereInput
+}
 
 
 export type GenerationRunSelect<ExtArgs extends runtime.Types.Extensions.InternalArgs = runtime.Types.Extensions.DefaultArgs> = runtime.Types.Extensions.GetSelect<{
@@ -1706,6 +1901,8 @@ export type GenerationRunSelect<ExtArgs extends runtime.Types.Extensions.Interna
   imageSession?: boolean | Prisma.ImageSessionDefaultArgs<ExtArgs>
   sourceAsset?: boolean | Prisma.AssetDefaultArgs<ExtArgs>
   outputAsset?: boolean | Prisma.GenerationRun$outputAssetArgs<ExtArgs>
+  referenceImages?: boolean | Prisma.GenerationRun$referenceImagesArgs<ExtArgs>
+  _count?: boolean | Prisma.GenerationRunCountOutputTypeDefaultArgs<ExtArgs>
 }, ExtArgs["result"]["generationRun"]>
 
 export type GenerationRunSelectCreateManyAndReturn<ExtArgs extends runtime.Types.Extensions.InternalArgs = runtime.Types.Extensions.DefaultArgs> = runtime.Types.Extensions.GetSelect<{
@@ -1803,6 +2000,8 @@ export type GenerationRunInclude<ExtArgs extends runtime.Types.Extensions.Intern
   imageSession?: boolean | Prisma.ImageSessionDefaultArgs<ExtArgs>
   sourceAsset?: boolean | Prisma.AssetDefaultArgs<ExtArgs>
   outputAsset?: boolean | Prisma.GenerationRun$outputAssetArgs<ExtArgs>
+  referenceImages?: boolean | Prisma.GenerationRun$referenceImagesArgs<ExtArgs>
+  _count?: boolean | Prisma.GenerationRunCountOutputTypeDefaultArgs<ExtArgs>
 }
 export type GenerationRunIncludeCreateManyAndReturn<ExtArgs extends runtime.Types.Extensions.InternalArgs = runtime.Types.Extensions.DefaultArgs> = {
   project?: boolean | Prisma.ProjectDefaultArgs<ExtArgs>
@@ -1824,6 +2023,7 @@ export type $GenerationRunPayload<ExtArgs extends runtime.Types.Extensions.Inter
     imageSession: Prisma.$ImageSessionPayload<ExtArgs>
     sourceAsset: Prisma.$AssetPayload<ExtArgs>
     outputAsset: Prisma.$AssetPayload<ExtArgs> | null
+    referenceImages: Prisma.$GenerationReferenceImagePayload<ExtArgs>[]
   }
   scalars: runtime.Types.Extensions.GetPayloadResult<{
     id: string
@@ -2248,6 +2448,7 @@ export interface Prisma__GenerationRunClient<T, Null = never, ExtArgs extends ru
   imageSession<T extends Prisma.ImageSessionDefaultArgs<ExtArgs> = {}>(args?: Prisma.Subset<T, Prisma.ImageSessionDefaultArgs<ExtArgs>>): Prisma.Prisma__ImageSessionClient<runtime.Types.Result.GetResult<Prisma.$ImageSessionPayload<ExtArgs>, T, "findUniqueOrThrow", GlobalOmitOptions> | Null, Null, ExtArgs, GlobalOmitOptions>
   sourceAsset<T extends Prisma.AssetDefaultArgs<ExtArgs> = {}>(args?: Prisma.Subset<T, Prisma.AssetDefaultArgs<ExtArgs>>): Prisma.Prisma__AssetClient<runtime.Types.Result.GetResult<Prisma.$AssetPayload<ExtArgs>, T, "findUniqueOrThrow", GlobalOmitOptions> | Null, Null, ExtArgs, GlobalOmitOptions>
   outputAsset<T extends Prisma.GenerationRun$outputAssetArgs<ExtArgs> = {}>(args?: Prisma.Subset<T, Prisma.GenerationRun$outputAssetArgs<ExtArgs>>): Prisma.Prisma__AssetClient<runtime.Types.Result.GetResult<Prisma.$AssetPayload<ExtArgs>, T, "findUniqueOrThrow", GlobalOmitOptions> | null, null, ExtArgs, GlobalOmitOptions>
+  referenceImages<T extends Prisma.GenerationRun$referenceImagesArgs<ExtArgs> = {}>(args?: Prisma.Subset<T, Prisma.GenerationRun$referenceImagesArgs<ExtArgs>>): Prisma.PrismaPromise<runtime.Types.Result.GetResult<Prisma.$GenerationReferenceImagePayload<ExtArgs>, T, "findMany", GlobalOmitOptions> | Null>
   /**
    * Attaches callbacks for the resolution and/or rejection of the Promise.
    * @param onfulfilled The callback to execute when the Promise is resolved.
@@ -2716,6 +2917,30 @@ export type GenerationRun$outputAssetArgs<ExtArgs extends runtime.Types.Extensio
    */
   include?: Prisma.AssetInclude<ExtArgs> | null
   where?: Prisma.AssetWhereInput
+}
+
+/**
+ * GenerationRun.referenceImages
+ */
+export type GenerationRun$referenceImagesArgs<ExtArgs extends runtime.Types.Extensions.InternalArgs = runtime.Types.Extensions.DefaultArgs> = {
+  /**
+   * Select specific fields to fetch from the GenerationReferenceImage
+   */
+  select?: Prisma.GenerationReferenceImageSelect<ExtArgs> | null
+  /**
+   * Omit specific fields from the GenerationReferenceImage
+   */
+  omit?: Prisma.GenerationReferenceImageOmit<ExtArgs> | null
+  /**
+   * Choose, which related nodes to fetch as well
+   */
+  include?: Prisma.GenerationReferenceImageInclude<ExtArgs> | null
+  where?: Prisma.GenerationReferenceImageWhereInput
+  orderBy?: Prisma.GenerationReferenceImageOrderByWithRelationInput | Prisma.GenerationReferenceImageOrderByWithRelationInput[]
+  cursor?: Prisma.GenerationReferenceImageWhereUniqueInput
+  take?: number
+  skip?: number
+  distinct?: Prisma.GenerationReferenceImageScalarFieldEnum | Prisma.GenerationReferenceImageScalarFieldEnum[]
 }
 
 /**

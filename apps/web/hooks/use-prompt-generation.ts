@@ -2,7 +2,7 @@
 
 import { useMutation } from "@tanstack/react-query";
 
-import { apiPatch, apiPost } from "@/lib/api";
+import { apiPatch, apiPost, apiUpload } from "@/lib/api";
 
 import type { GenerationRun, PreserveMode } from "@/types/generation";
 
@@ -16,6 +16,7 @@ type CreatePromptInput = {
   preserveMode: PreserveMode;
 
   preserveEverythingElse: boolean;
+  referenceImages?: File[];
 };
 
 type CreatePromptBody = {
@@ -27,27 +28,27 @@ type CreatePromptBody = {
 
 export function useCreatePrompt() {
   return useMutation({
-    mutationFn: ({
+    mutationFn: async ({
       projectId,
       sessionId,
       sourceAssetId,
       instruction,
       preserveMode,
       preserveEverythingElse,
+      referenceImages = [],
     }: CreatePromptInput) => {
-      const body: CreatePromptBody = {
-        sourceAssetId,
-        instruction,
-        preserveMode,
-        preserveEverythingElse,
-      };
+      const formData = new FormData();
 
-      console.log("Create prompt payload:", body);
+      formData.append("sourceAssetId", sourceAssetId);
+      formData.append("instruction", instruction);
+      formData.append("preserveMode", preserveMode);
+      formData.append("preserveEverythingElse", String(preserveEverythingElse));
 
-      return apiPost<GenerationRun, CreatePromptBody>(
-        `/api/projects/${projectId}/image-sessions/${sessionId}/prompts`,
-        body,
-      );
+      for (const image of referenceImages) {
+        formData.append("referenceImages", image);
+      }
+
+      return apiUpload<GenerationRun>(`/api/projects/${projectId}/image-sessions/${sessionId}/prompts`, formData);
     },
   });
 }
@@ -91,7 +92,6 @@ export function useConnectGemini() {
       >("/api/generations/providers/gemini/connect", {}),
   });
 }
-
 
 export function useCancelGeneration() {
   return useMutation({

@@ -24,6 +24,10 @@ projectRouter.get("/:projectId/image-sessions/:sessionId", getImageSession);
 projectRouter.post("/:projectId/image-sessions", uploadRender.single("image"), createImageSession);
 projectRouter.delete("/:projectId/image-sessions", deleteImageSessions);
 projectRouter.delete("/:projectId/image-sessions/:sessionId/assets", deleteVersions);
-projectRouter.post("/:projectId/image-sessions/:sessionId/prompts", createPrompt);
+projectRouter.post(
+  "/:projectId/image-sessions/:sessionId/prompts",
+  uploadRender.array("referenceImages", 5),
+  createPrompt,
+);
 
 projectRouter.get("/:projectId", getProject);

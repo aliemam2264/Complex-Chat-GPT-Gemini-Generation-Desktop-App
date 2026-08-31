@@ -380,8 +380,40 @@ export class ChatGPTBrowserPromptProvider implements PromptProvider {
   // Image Upload
   // ---------------------------------------------------------------------------
 
-  private async uploadImage(page: Page, imagePath: string): Promise<void> {
-    console.log("[ChatGPT] Uploading source image:", imagePath);
+  private async getVisibleAttachmentEvidenceCount(page: Page): Promise<number> {
+    const selectors = [
+      'button[aria-label*="Remove file" i]',
+      'button[aria-label*="Remove attachment" i]',
+      'button[aria-label*="إزالة الملف"]',
+      'button[aria-label*="إزالة المرفق"]',
+      '[data-testid*="attachment"]',
+      'img[src^="blob:"]',
+    ];
+
+    let maxVisibleCount = 0;
+
+    for (const selector of selectors) {
+      const locator = page.locator(selector);
+      const count = await locator.count().catch(() => 0);
+      let visibleCount = 0;
+
+      for (let index = 0; index < count; index += 1) {
+        if (await locator.nth(index).isVisible().catch(() => false)) {
+          visibleCount += 1;
+        }
+      }
+
+      maxVisibleCount = Math.max(maxVisibleCount, visibleCount);
+    }
+
+    return maxVisibleCount;
+  }
+
+  private async uploadImage(page: Page, imagePath: string, label = "source image"): Promise<void> {
+    console.log(`[ChatGPT] Uploading ${label}:`, imagePath);
+
+    const baselineAttachmentCount =
+      await this.getVisibleAttachmentEvidenceCount(page);
 
     /*
      * ChatGPT commonly keeps a hidden file input mounted
@@ -392,7 +424,7 @@ export class ChatGPTBrowserPromptProvider implements PromptProvider {
     if ((await fileInputs.count()) > 0) {
       await fileInputs.last().setInputFiles(imagePath);
 
-      await this.waitForAttachment(page);
+      await this.waitForAttachment(page, label, baselineAttachmentCount);
 
       return;
     }
@@ -458,25 +490,20 @@ export class ChatGPTBrowserPromptProvider implements PromptProvider {
 
     await fileInputs.last().setInputFiles(imagePath);
 
-    await this.waitForAttachment(page);
+    await this.waitForAttachment(page, label, baselineAttachmentCount);
   }
 
-  private async waitForAttachment(page: Page): Promise<void> {
-    console.log("[ChatGPT] Waiting for image attachment to finish uploading...");
+  private async waitForAttachment(
+    page: Page,
+    label: string,
+    baselineAttachmentCount: number,
+  ): Promise<void> {
+    console.log(`[ChatGPT] Waiting for ${label} attachment to finish uploading...`);
 
-    const deadline = Date.now() + 45_000;
+    const startedAt = Date.now();
+    const deadline = startedAt + 45_000;
     let sawAttachment = false;
     let lastProgressLogAt = 0;
-
-    const attachmentSelectors = [
-      '[data-testid*="attachment"]',
-      '[data-testid*="file"]',
-      'button[aria-label*="Remove file" i]',
-      'button[aria-label*="Remove attachment" i]',
-      'button[aria-label*="إزالة الملف"]',
-      'button[aria-label*="إزالة المرفق"]',
-      'img[src^="blob:"]',
-    ];
 
     const uploadBusySelectors = [
       '[aria-busy="true"]',
@@ -487,7 +514,7 @@ export class ChatGPTBrowserPromptProvider implements PromptProvider {
 
     while (Date.now() < deadline) {
       if (page.isClosed()) {
-        throw new Error("ChatGPT page closed while the source image was uploading.");
+        throw new Error(`ChatGPT page closed while the ${label} was uploading.`);
       }
 
       const bodyText = await page.locator("body").innerText().catch(() => "");
@@ -499,20 +526,27 @@ export class ChatGPTBrowserPromptProvider implements PromptProvider {
         normalized.includes("couldn't upload") ||
         normalized.includes("could not upload")
       ) {
-        throw new Error("ChatGPT failed to upload the source image.");
+        throw new Error(`ChatGPT failed to upload the ${label}.`);
       }
 
-      for (const selector of attachmentSelectors) {
-        const locator = page.locator(selector);
-        const count = await locator.count().catch(() => 0);
+      const currentAttachmentCount =
+        await this.getVisibleAttachmentEvidenceCount(page);
 
-        if (count > 0) {
-          const visible = await locator.last().isVisible().catch(() => false);
-          if (visible) {
-            sawAttachment = true;
-            break;
-          }
-        }
+      const inputHasFile = await page
+        .locator('input[type="file"]')
+        .evaluateAll((inputs) =>
+          inputs.some(
+            (input) =>
+              ((input as HTMLInputElement).files?.length ?? 0) > 0,
+          ),
+        )
+        .catch(() => false);
+
+      if (
+        currentAttachmentCount > baselineAttachmentCount ||
+        inputHasFile
+      ) {
+        sawAttachment = true;
       }
 
       let busy = false;
@@ -540,8 +574,26 @@ export class ChatGPTBrowserPromptProvider implements PromptProvider {
 
       if (sawAttachment && !busy && !hasUploadingText) {
         await page.waitForTimeout(700);
-        console.log("[ChatGPT] Source image attachment is ready.");
+        console.log(`[ChatGPT] ${label} attachment is ready.`);
         return;
+      }
+
+      /*
+       * ChatGPT can consume/reset the native file input before exposing a
+       * stable attachment marker. Because setInputFiles() already succeeded, a
+       * stable composer with no upload text is a safe fallback after a short
+       * settle window. This is especially important for additional references,
+       * where an existing source attachment must not be mistaken for the new one.
+       */
+      if (Date.now() - startedAt >= 4_000 && !hasUploadingText) {
+        const composer = await this.findComposer(page);
+
+        if (composer && (await composer.isVisible().catch(() => false))) {
+          console.log(
+            `[ChatGPT] ${label} accepted via stable composer fallback.`,
+          );
+          return;
+        }
       }
 
       if (Date.now() - lastProgressLogAt >= 5_000) {
@@ -566,22 +618,45 @@ export class ChatGPTBrowserPromptProvider implements PromptProvider {
   // ---------------------------------------------------------------------------
 
   private buildEditRequest(input: PromptGenerationInput) {
-    const preserveModeText =
-      input.preserveMode === "STRICT"
-        ? "Apply only the exact requested change. Preserve everything else as precisely as possible."
-        : input.preserveMode === "BALANCED"
-          ? "Apply the requested change clearly while preserving the original image structure, composition, and identity."
-          : "Apply the requested change creatively, but still keep the source image recognizable and consistent with the user's intent.";
+    const preserveModeText = input.preservePresetPrompt.trim();
+    const unrestricted = input.preserveMode === "NO_RESTRICTION";
 
-    const preserveEverythingText = input.preserveEverythingElse
-      ? `
+    const preserveEverythingText = unrestricted
+      ? ""
+      : input.preserveEverythingElse
+        ? `
 PRESERVE EVERYTHING ELSE:
 Yes. Keep all unrelated parts of the image unchanged unless the user explicitly asks otherwise.
 `
-      : `
+        : `
 PRESERVE EVERYTHING ELSE:
 No. You may make supporting adjustments only if they are necessary to fulfill the request, but do not introduce unrelated changes.
 `;
+
+    const preservationRules = unrestricted
+      ? `
+- Follow the user's requested transformation directly.
+- Do not add preservation constraints beyond the selected No Restriction preset.
+- Broad edits, replacements, restyling, recomposition, and structural changes are allowed when they support the request.
+`
+      : `
+- Preserve the original composition, framing, subject identity, proportions, and visual structure unless the user explicitly asks to change them.
+- Do not add unnecessary stylistic changes.
+- Do not rewrite the image concept. Edit the existing image.
+`;
+
+    const referenceCount = input.referenceImages?.length ?? 0;
+    const imageRoleText =
+      referenceCount > 0
+        ? `
+ATTACHED IMAGE ROLES:
+- The FIRST attached image is the SOURCE IMAGE that must be edited.
+- The next ${referenceCount} attached image${referenceCount === 1 ? " is" : "s are"} VISUAL REFERENCE IMAGE${referenceCount === 1 ? "" : "S"} only.
+- Use the reference image${referenceCount === 1 ? "" : "s"} as visual guidance for style, material, object, color, composition detail, or other characteristics relevant to the user's request.
+- Do NOT treat a reference image as the main image to edit.
+- Do NOT copy unrelated content from a reference image into the source.
+`
+        : "";
 
     return `
 You are writing a final image-editing prompt for Gemini / Nano Banana.
@@ -594,9 +669,7 @@ IMPORTANT RULES:
 - If the image is a logo, graphic, poster, product shot, portrait, illustration, or any non-architectural image, treat it accordingly.
 - Do NOT invent buildings, rooms, landscapes, or architectural features unless they already exist in the image or the user explicitly requests them.
 - If the user asks for a simple change (for example: change a color), then the output prompt must focus only on that change.
-- Preserve the original composition, framing, subject identity, proportions, and visual structure unless the user explicitly asks to change them.
-- Do not add unnecessary stylistic changes.
-- Do not rewrite the image concept. Edit the existing image.
+${preservationRules}
 
 OUTPUT REQUIREMENTS:
 - Return only the final prompt text.
@@ -604,11 +677,12 @@ OUTPUT REQUIREMENTS:
 - Do not include labels like "USER REQUEST" or "ANALYSIS".
 - Write the prompt as a direct instruction for image editing.
 
-EDIT MODE:
+EDIT PRESET:
 ${preserveModeText}
 
 ${preserveEverythingText}
 
+${imageRoleText}
 YOUR TASK:
 Write a concise but strong final edit prompt for the uploaded image based on this user request:
 
@@ -616,7 +690,7 @@ Write a concise but strong final edit prompt for the uploaded image based on thi
 
 The final prompt should:
 - clearly state what must change
-- clearly state what must stay unchanged
+${unrestricted ? "- avoid adding preservation requirements the user did not ask for" : "- clearly state what must stay unchanged"}
 - match the true type of the source image
 - avoid hallucinating new content
 - be suitable for Gemini / Nano Banana image editing
@@ -968,7 +1042,28 @@ The final prompt should:
         message: "Uploading source image to ChatGPT...",
       });
 
-      await this.uploadImage(page, input.sourceImagePath);
+      await this.uploadImage(page, input.sourceImagePath, "source image");
+
+      const referenceImages = input.referenceImages ?? [];
+
+      for (let index = 0; index < referenceImages.length; index += 1) {
+        const referenceImage = referenceImages[index];
+
+        if (!referenceImage) {
+          continue;
+        }
+
+        await input.onProgress?.({
+          stage: "CHATGPT_UPLOADING_IMAGE",
+          message: `Uploading reference image ${index + 1} of ${referenceImages.length} to ChatGPT...`,
+        });
+
+        await this.uploadImage(
+          page,
+          referenceImage.path,
+          `reference image ${index + 1}/${referenceImages.length}`,
+        );
+      }
 
       const composer = await this.findComposer(page);
 

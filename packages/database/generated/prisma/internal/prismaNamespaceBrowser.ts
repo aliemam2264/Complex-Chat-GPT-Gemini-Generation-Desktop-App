@@ -54,7 +54,8 @@ export const ModelName = {
   Project: 'Project',
   ImageSession: 'ImageSession',
   Asset: 'Asset',
-  GenerationRun: 'GenerationRun'
+  GenerationRun: 'GenerationRun',
+  GenerationReferenceImage: 'GenerationReferenceImage'
 } as const
 
 export type ModelName = (typeof ModelName)[keyof typeof ModelName]
@@ -136,6 +137,19 @@ export const GenerationRunScalarFieldEnum = {
 } as const
 
 export type GenerationRunScalarFieldEnum = (typeof GenerationRunScalarFieldEnum)[keyof typeof GenerationRunScalarFieldEnum]
+
+
+export const GenerationReferenceImageScalarFieldEnum = {
+  id: 'id',
+  generationRunId: 'generationRunId',
+  filePath: 'filePath',
+  fileName: 'fileName',
+  mimeType: 'mimeType',
+  sortOrder: 'sortOrder',
+  createdAt: 'createdAt'
+} as const
+
+export type GenerationReferenceImageScalarFieldEnum = (typeof GenerationReferenceImageScalarFieldEnum)[keyof typeof GenerationReferenceImageScalarFieldEnum]
 
 
 export const SortOrder = {

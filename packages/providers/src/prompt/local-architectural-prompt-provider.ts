@@ -1,54 +1,24 @@
 import type { PromptGenerationInput, PromptProvider } from "./types";
 
-function getPreservationRules(mode: PromptGenerationInput["preserveMode"]) {
-  switch (mode) {
-    case "STRICT":
-      return `
-Preserve the original image with maximum precision.
-
-Do not change:
-- architectural geometry
-- building proportions
-- camera position
-- camera angle
-- lens perspective
-- composition
-- openings
-- structural elements
-- furniture layout unless explicitly requested
-- materials unless explicitly requested
-- lighting unless explicitly requested
-
-Modify only what is explicitly requested.
-`;
-
-    case "BALANCED":
-      return `
-Preserve the original architectural design, camera and composition.
-
-Minor supporting improvements are allowed only when they help achieve the requested change.
-
-Avoid unnecessary modifications to unrelated elements.
-`;
-
-    case "CREATIVE":
-      return `
-Preserve the core architectural identity and general composition.
-
-Creative visual improvements are allowed when they support the requested direction, while avoiding unnecessary redesign of the architecture.
-`;
+function getPreservationRules(input: PromptGenerationInput) {
+  if (input.preserveMode === "NO_RESTRICTION") {
+    return input.preservePresetPrompt;
   }
+
+  if (input.preserveEverythingElse) {
+    return input.preservePresetPrompt;
+  }
+
+  return `
+You may modify supporting visual elements when necessary to achieve the requested result.
+
+Keep the main visual identity recognizable unless the user explicitly requests a redesign.
+`;
 }
 
 export class LocalArchitecturalPromptProvider implements PromptProvider {
   async generate(input: PromptGenerationInput): Promise<string> {
-    const preservationRules = input.preserveEverythingElse
-      ? getPreservationRules(input.preserveMode)
-      : `
-You may modify supporting visual elements when necessary to achieve the requested result.
-
-Keep the main architectural identity recognizable unless the user explicitly requests a redesign.
-`;
+    const preservationRules = getPreservationRules(input);
 
     return `
 Use the provided image as the primary visual reference.

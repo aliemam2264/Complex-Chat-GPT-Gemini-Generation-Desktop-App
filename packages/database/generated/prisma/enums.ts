@@ -20,7 +20,8 @@ export type AssetType = (typeof AssetType)[keyof typeof AssetType]
 export const PreserveMode = {
   STRICT: 'STRICT',
   BALANCED: 'BALANCED',
-  CREATIVE: 'CREATIVE'
+  CREATIVE: 'CREATIVE',
+  NO_RESTRICTION: 'NO_RESTRICTION'
 } as const
 
 export type PreserveMode = (typeof PreserveMode)[keyof typeof PreserveMode]

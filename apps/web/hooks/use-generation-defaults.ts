@@ -34,7 +34,8 @@ export function useGenerationDefaults() {
       if (
         parsed.preserveMode === "STRICT" ||
         parsed.preserveMode === "BALANCED" ||
-        parsed.preserveMode === "CREATIVE"
+        parsed.preserveMode === "CREATIVE" ||
+        parsed.preserveMode === "NO_RESTRICTION"
       ) {
         setPreserveModeState(parsed.preserveMode);
       }

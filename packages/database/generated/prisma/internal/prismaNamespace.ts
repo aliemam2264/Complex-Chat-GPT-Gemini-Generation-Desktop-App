@@ -400,7 +400,8 @@ export const ModelName = {
   Project: 'Project',
   ImageSession: 'ImageSession',
   Asset: 'Asset',
-  GenerationRun: 'GenerationRun'
+  GenerationRun: 'GenerationRun',
+  GenerationReferenceImage: 'GenerationReferenceImage'
 } as const
 
 export type ModelName = (typeof ModelName)[keyof typeof ModelName]
@@ -416,7 +417,7 @@ export type TypeMap<ExtArgs extends runtime.Types.Extensions.InternalArgs = runt
     omit: GlobalOmitOptions
   }
   meta: {
-    modelProps: "project" | "imageSession" | "asset" | "generationRun"
+    modelProps: "project" | "imageSession" | "asset" | "generationRun" | "generationReferenceImage"
     txIsolationLevel: TransactionIsolationLevel
   }
   model: {
@@ -716,6 +717,80 @@ export type TypeMap<ExtArgs extends runtime.Types.Extensions.InternalArgs = runt
         }
       }
     }
+    GenerationReferenceImage: {
+      payload: Prisma.$GenerationReferenceImagePayload<ExtArgs>
+      fields: Prisma.GenerationReferenceImageFieldRefs
+      operations: {
+        findUnique: {
+          args: Prisma.GenerationReferenceImageFindUniqueArgs<ExtArgs>
+          result: runtime.Types.Utils.PayloadToResult<Prisma.$GenerationReferenceImagePayload> | null
+        }
+        findUniqueOrThrow: {
+          args: Prisma.GenerationReferenceImageFindUniqueOrThrowArgs<ExtArgs>
+          result: runtime.Types.Utils.PayloadToResult<Prisma.$GenerationReferenceImagePayload>
+        }
+        findFirst: {
+          args: Prisma.GenerationReferenceImageFindFirstArgs<ExtArgs>
+          result: runtime.Types.Utils.PayloadToResult<Prisma.$GenerationReferenceImagePayload> | null
+        }
+        findFirstOrThrow: {
+          args: Prisma.GenerationReferenceImageFindFirstOrThrowArgs<ExtArgs>
+          result: runtime.Types.Utils.PayloadToResult<Prisma.$GenerationReferenceImagePayload>
+        }
+        findMany: {
+          args: Prisma.GenerationReferenceImageFindManyArgs<ExtArgs>
+          result: runtime.Types.Utils.PayloadToResult<Prisma.$GenerationReferenceImagePayload>[]
+        }
+        create: {
+          args: Prisma.GenerationReferenceImageCreateArgs<ExtArgs>
+          result: runtime.Types.Utils.PayloadToResult<Prisma.$GenerationReferenceImagePayload>
+        }
+        createMany: {
+          args: Prisma.GenerationReferenceImageCreateManyArgs<ExtArgs>
+          result: BatchPayload
+        }
+        createManyAndReturn: {
+          args: Prisma.GenerationReferenceImageCreateManyAndReturnArgs<ExtArgs>
+          result: runtime.Types.Utils.PayloadToResult<Prisma.$GenerationReferenceImagePayload>[]
+        }
+        delete: {
+          args: Prisma.GenerationReferenceImageDeleteArgs<ExtArgs>
+          result: runtime.Types.Utils.PayloadToResult<Prisma.$GenerationReferenceImagePayload>
+        }
+        update: {
+          args: Prisma.GenerationReferenceImageUpdateArgs<ExtArgs>
+          result: runtime.Types.Utils.PayloadToResult<Prisma.$GenerationReferenceImagePayload>
+        }
+        deleteMany: {
+          args: Prisma.GenerationReferenceImageDeleteManyArgs<ExtArgs>
+          result: BatchPayload
+        }
+        updateMany: {
+          args: Prisma.GenerationReferenceImageUpdateManyArgs<ExtArgs>
+          result: BatchPayload
+        }
+        updateManyAndReturn: {
+          args: Prisma.GenerationReferenceImageUpdateManyAndReturnArgs<ExtArgs>
+          result: runtime.Types.Utils.PayloadToResult<Prisma.$GenerationReferenceImagePayload>[]
+        }
+        upsert: {
+          args: Prisma.GenerationReferenceImageUpsertArgs<ExtArgs>
+          result: runtime.Types.Utils.PayloadToResult<Prisma.$GenerationReferenceImagePayload>
+        }
+        aggregate: {
+          args: Prisma.GenerationReferenceImageAggregateArgs<ExtArgs>
+          result: runtime.Types.Utils.Optional<Prisma.AggregateGenerationReferenceImage>
+        }
+        groupBy: {
+          args: Prisma.GenerationReferenceImageGroupByArgs<ExtArgs>
+          result: runtime.Types.Utils.Optional<Prisma.GenerationReferenceImageGroupByOutputType>[]
+        }
+        count: {
+          args: Prisma.GenerationReferenceImageCountArgs<ExtArgs>
+          result: runtime.Types.Utils.Optional<Prisma.GenerationReferenceImageCountAggregateOutputType> | number
+        }
+      }
+    }
   }
 } & {
   other: {
@@ -818,6 +893,19 @@ export const GenerationRunScalarFieldEnum = {
 } as const
 
 export type GenerationRunScalarFieldEnum = (typeof GenerationRunScalarFieldEnum)[keyof typeof GenerationRunScalarFieldEnum]
+
+
+export const GenerationReferenceImageScalarFieldEnum = {
+  id: 'id',
+  generationRunId: 'generationRunId',
+  filePath: 'filePath',
+  fileName: 'fileName',
+  mimeType: 'mimeType',
+  sortOrder: 'sortOrder',
+  createdAt: 'createdAt'
+} as const
+
+export type GenerationReferenceImageScalarFieldEnum = (typeof GenerationReferenceImageScalarFieldEnum)[keyof typeof GenerationReferenceImageScalarFieldEnum]
 
 
 export const SortOrder = {
@@ -1059,6 +1147,7 @@ export type GlobalOmitConfig = {
   imageSession?: Prisma.ImageSessionOmit
   asset?: Prisma.AssetOmit
   generationRun?: Prisma.GenerationRunOmit
+  generationReferenceImage?: Prisma.GenerationReferenceImageOmit
 }
 
 /* Types for Logging */

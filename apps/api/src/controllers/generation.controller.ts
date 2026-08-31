@@ -1,5 +1,6 @@
-import { rm } from "node:fs/promises";
-import { join, relative } from "node:path";
+import { randomUUID } from "node:crypto";
+import { mkdir, rm, writeFile } from "node:fs/promises";
+import { dirname, join, relative } from "node:path";
 
 import type { Request, Response } from "express";
 import { z } from "zod";
@@ -14,6 +15,7 @@ import {
 
 import { getStorageRoot } from "../config/storage";
 import { imageJobManager, promptJobManager } from "../services/background-job-manager";
+import { getEffectivePromptPreset } from "../services/prompt-preset-settings";
 
 type GenerationParams = {
   generationId: string;
@@ -37,22 +39,32 @@ const createPromptSchema = z.object({
 
   instruction: z.string().trim().min(1, "Instruction is required.").max(3000),
 
-  preserveMode: z.enum(["STRICT", "BALANCED", "CREATIVE"]),
+  preserveMode: z.enum(["STRICT", "BALANCED", "CREATIVE", "NO_RESTRICTION"]),
 
-  preserveEverythingElse: z.boolean(),
+  preserveEverythingElse: z.preprocess((value) => {
+    if (value === "true") {
+      return true;
+    }
+
+    if (value === "false") {
+      return false;
+    }
+
+    return value;
+  }, z.boolean()),
 });
 
 const updatePromptSchema = z.object({
   prompt: z.string().trim().min(10).max(12000),
 });
 
-const ACTIVE_GENERATION_STATUSES = [
-  "PENDING",
-  "PROMPTING",
-  "PROMPT_READY",
-  "GENERATING",
-  "DOWNLOADING",
-] as const;
+const referenceExtensionByMimeType: Record<string, string> = {
+  "image/jpeg": ".jpg",
+  "image/png": ".png",
+  "image/webp": ".webp",
+};
+
+const ACTIVE_GENERATION_STATUSES = ["PENDING", "PROMPTING", "PROMPT_READY", "GENERATING", "DOWNLOADING"] as const;
 
 async function markGenerationCanceled(generationId: string) {
   const now = new Date();
@@ -75,13 +87,21 @@ async function markGenerationCanceled(generationId: string) {
   });
 }
 
-
 /* -------------------------------------------------------------------------- */
 /*                                Create Prompt                               */
 /* -------------------------------------------------------------------------- */
 
 export async function createPrompt(request: Request<SessionParams>, response: Response) {
   const { projectId, sessionId } = request.params;
+
+  const referenceFiles = (request.files as Express.Multer.File[] | undefined) ?? [];
+
+  if (referenceFiles.length > 5) {
+    return response.status(422).json({
+      success: false,
+      message: "You can attach up to 5 reference images.",
+    });
+  }
 
   const parsed = createPromptSchema.safeParse(request.body);
 
@@ -119,17 +139,105 @@ export async function createPrompt(request: Request<SessionParams>, response: Re
     data: {
       projectId,
       imageSessionId: sessionId,
+
       sourceAssetId: sourceAsset.id,
+
       userInstruction: instruction,
+
       preserveMode,
       preserveEverythingElse,
+
       promptProvider: "CHATGPT_BROWSER",
+
       status: "PENDING",
-      progressStage: "CHATGPT_STARTING",
-      progressMessage: "Starting ChatGPT...",
-      attemptCount: 1,
-      lastAttemptAt: new Date(),
+
+      progressStage: "QUEUED",
+      progressMessage: "Waiting to start ChatGPT...",
+
       errorMessage: null,
+    },
+  });
+
+  const writtenReferencePaths: string[] = [];
+
+  try {
+    for (let index = 0; index < referenceFiles.length; index += 1) {
+      const file = referenceFiles[index];
+
+      if (!file) {
+        continue;
+      }
+
+      const referenceId = randomUUID();
+
+      const extension = referenceExtensionByMimeType[file.mimetype] ?? ".png";
+
+      const storedFileName = `reference-${referenceId}${extension}`;
+
+      const relativeFilePath = ["projects", projectId, sessionId, "references", generation.id, storedFileName].join(
+        "/",
+      );
+
+      const absoluteFilePath = join(getStorageRoot(), relativeFilePath);
+
+      await mkdir(dirname(absoluteFilePath), {
+        recursive: true,
+      });
+
+      await writeFile(absoluteFilePath, file.buffer);
+
+      writtenReferencePaths.push(absoluteFilePath);
+
+      await prisma.generationReferenceImage.create({
+        data: {
+          id: referenceId,
+
+          generationRunId: generation.id,
+
+          filePath: relativeFilePath,
+          fileName: file.originalname,
+          mimeType: file.mimetype,
+
+          sortOrder: index,
+        },
+      });
+    }
+  } catch (error) {
+    await Promise.all(
+      writtenReferencePaths.map((filePath) =>
+        rm(filePath, {
+          force: true,
+        }).catch(() => undefined),
+      ),
+    );
+
+    await prisma.generationRun
+      .delete({
+        where: {
+          id: generation.id,
+        },
+      })
+      .catch(() => undefined);
+
+    console.error(`[Generation] Failed to save reference images for ${generation.id}:`, error);
+
+    return response.status(500).json({
+      success: false,
+      message: "Failed to save reference images.",
+    });
+  }
+
+  const generationWithReferences = await prisma.generationRun.findUnique({
+    where: {
+      id: generation.id,
+    },
+
+    include: {
+      referenceImages: {
+        orderBy: {
+          sortOrder: "asc",
+        },
+      },
     },
   });
 
@@ -137,7 +245,7 @@ export async function createPrompt(request: Request<SessionParams>, response: Re
 
   return response.status(202).json({
     success: true,
-    data: generation,
+    data: generationWithReferences,
   });
 }
 
@@ -381,10 +489,7 @@ export async function getGenerationActivity(request: Request, response: Response
         },
         {
           status: "FAILED",
-          OR: [
-            { imageProvider: "GEMINI_BROWSER" },
-            { progressStage: "INTERRUPTED" },
-          ],
+          OR: [{ imageProvider: "GEMINI_BROWSER" }, { progressStage: "INTERRUPTED" }],
           updatedAt: { gte: recentThreshold },
         },
       ],
@@ -452,10 +557,7 @@ export async function cancelGeneration(request: Request<GenerationParams>, respo
   promptJobManager.cancel(generation.id);
   imageJobManager.cancel(generation.id);
 
-  await Promise.all([
-    promptJobManager.waitForIdle(generation.id),
-    imageJobManager.waitForIdle(generation.id),
-  ]);
+  await Promise.all([promptJobManager.waitForIdle(generation.id), imageJobManager.waitForIdle(generation.id)]);
 
   const now = new Date();
 
@@ -724,21 +826,25 @@ export async function getChatGPTStatus(_request: Request, response: Response) {
 
 function buildLocalFallbackPrompt(input: {
   instruction: string;
-  preserveMode: "STRICT" | "BALANCED" | "CREATIVE";
+  preserveMode: "STRICT" | "BALANCED" | "CREATIVE" | "NO_RESTRICTION";
   preserveEverythingElse: boolean;
+  preservePresetPrompt: string;
 }) {
-  const modeInstruction = {
-    STRICT:
-      "Make only the requested change. Preserve the source image as strictly as possible and do not reinterpret unrelated content.",
-    BALANCED:
-      "Make the requested change naturally while preserving the source composition, identity, perspective, proportions, and unrelated content.",
-    CREATIVE:
-      "Apply the requested change with broader visual freedom where useful, while preserving the recognizable identity and overall composition of the source image.",
-  }[input.preserveMode];
+  const modeInstruction = input.preservePresetPrompt;
 
-  const preserveInstruction = input.preserveEverythingElse
-    ? "Everything not explicitly requested by the user must remain unchanged."
-    : "Avoid unnecessary changes to unrelated parts of the source image.";
+  const preserveInstruction =
+    input.preserveMode === "NO_RESTRICTION"
+      ? null
+      : input.preserveEverythingElse
+        ? "Everything not explicitly requested by the user must remain unchanged."
+        : "Avoid unnecessary changes to unrelated parts of the source image.";
+
+  const sourceConsistencyRules =
+    input.preserveMode === "NO_RESTRICTION"
+      ? `- Follow the user's requested transformation directly without adding extra preservation constraints.
+- Broad restyling, replacement, recomposition, and structural changes are allowed when they support the request.`
+      : `- Keep perspective, scale, geometry, subject identity, layout, and composition consistent unless the user explicitly asks to change them.
+- Keep unaffected objects, materials, colors, lighting, text, logos, and background content unchanged unless required by the request.`;
 
   return `
 Edit the attached source image according to the user request below.
@@ -748,8 +854,7 @@ ${input.instruction}
 
 EDITING RULES:
 - ${modeInstruction}
-- ${preserveInstruction}
-- Keep perspective, scale, geometry, subject identity, layout, and composition consistent unless the user explicitly asks to change them.
+${preserveInstruction ? `- ${preserveInstruction}\n` : ""}- Keep perspective, scale, geometry, subject identity, layout, and composition consistent unless the user explicitly asks to change them.
 - Keep unaffected objects, materials, colors, lighting, text, logos, and background content unchanged unless required by the request.
 - Produce a clean, coherent, realistic final image without duplicated elements, warped geometry, accidental text, artifacts, or watermarks.
 - Match the true visual type and style of the source image instead of forcing a specific design category.
@@ -764,7 +869,12 @@ Return the final edited image directly. Do not return explanations, analysis, or
 async function runPromptJob(generationId: string, signal: AbortSignal) {
   const generation = await prisma.generationRun.findUnique({
     where: { id: generationId },
-    include: { sourceAsset: true },
+    include: {
+      sourceAsset: true,
+      referenceImages: {
+        orderBy: { sortOrder: "asc" },
+      },
+    },
   });
 
   if (!generation) {
@@ -802,13 +912,21 @@ async function runPromptJob(generationId: string, signal: AbortSignal) {
 
     let refinedPrompt = "";
 
+    const preservePresetPrompt = await getEffectivePromptPreset(generation.preserveMode);
+
     try {
       refinedPrompt = await chatGPTPromptProvider.generate({
         instruction: generation.userInstruction,
         preserveMode: generation.preserveMode,
         preserveEverythingElse: generation.preserveEverythingElse,
+        preservePresetPrompt,
         sourceImagePath: join(getStorageRoot(), generation.sourceAsset.filePath),
         sourceMimeType: generation.sourceAsset.mimeType,
+        referenceImages: generation.referenceImages.map((referenceImage) => ({
+          path: join(getStorageRoot(), referenceImage.filePath),
+          fileName: referenceImage.fileName,
+          mimeType: referenceImage.mimeType,
+        })),
         signal,
         onProgress: async ({ stage, message }) => {
           if (signal.aborted) {
@@ -843,6 +961,7 @@ async function runPromptJob(generationId: string, signal: AbortSignal) {
         instruction: generation.userInstruction,
         preserveMode: generation.preserveMode,
         preserveEverythingElse: generation.preserveEverythingElse,
+        preservePresetPrompt,
       });
 
       await prisma.generationRun.updateMany({
@@ -868,6 +987,7 @@ async function runPromptJob(generationId: string, signal: AbortSignal) {
         instruction: generation.userInstruction,
         preserveMode: generation.preserveMode,
         preserveEverythingElse: generation.preserveEverythingElse,
+        preservePresetPrompt,
       });
     }
 
@@ -928,7 +1048,12 @@ async function runPromptJob(generationId: string, signal: AbortSignal) {
 async function runGeminiJob(generationId: string, signal: AbortSignal) {
   const generation = await prisma.generationRun.findUnique({
     where: { id: generationId },
-    include: { sourceAsset: true },
+    include: {
+      sourceAsset: true,
+      referenceImages: {
+        orderBy: { sortOrder: "asc" },
+      },
+    },
   });
 
   if (!generation) {
@@ -996,14 +1121,16 @@ async function runGeminiJob(generationId: string, signal: AbortSignal) {
           where: { id: generation.id, status: "GENERATING" },
           data: {
             progressStage: "GEMINI_GENERATING",
-            progressMessage:
-              attempt === 1 ? "Gemini is editing your render..." : "Retrying Gemini generation...",
+            progressMessage: attempt === 1 ? "Gemini is editing your render..." : "Retrying Gemini generation...",
             errorMessage: null,
           },
         });
 
         result = await geminiProvider.generate({
           sourceImagePath,
+          referenceImagePaths: generation.referenceImages.map((referenceImage) =>
+            join(storageRoot, referenceImage.filePath),
+          ),
           outputDirectory,
           prompt: generation.refinedPrompt,
           signal,
@@ -1021,7 +1148,9 @@ async function runGeminiJob(generationId: string, signal: AbortSignal) {
         }
 
         const message = error instanceof Error ? error.message : "";
-        const submissionFailure = /did not accept the prompt|prompt.*submit|composer.*prompt|source image upload/i.test(message);
+        const submissionFailure = /did not accept the prompt|prompt.*submit|composer.*prompt|source image upload/i.test(
+          message,
+        );
 
         /*
          * The provider already performs three verified send attempts on the

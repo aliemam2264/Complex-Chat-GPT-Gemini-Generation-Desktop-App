@@ -1,6 +1,6 @@
 import { prisma } from "./client";
 
-const SCHEMA_VERSION = 1;
+const SCHEMA_VERSION = 2;
 
 const schemaStatements = [
   `CREATE TABLE IF NOT EXISTS "_EskanderMeta" (
@@ -80,6 +80,18 @@ const schemaStatements = [
       FOREIGN KEY ("outputAssetId") REFERENCES "Asset" ("id")
       ON DELETE SET NULL ON UPDATE CASCADE
   )`,
+  `CREATE TABLE IF NOT EXISTS "GenerationReferenceImage" (
+    "id" TEXT NOT NULL PRIMARY KEY,
+    "generationRunId" TEXT NOT NULL,
+    "filePath" TEXT NOT NULL,
+    "fileName" TEXT NOT NULL,
+    "mimeType" TEXT NOT NULL,
+    "sortOrder" INTEGER NOT NULL DEFAULT 0,
+    "createdAt" DATETIME NOT NULL,
+    CONSTRAINT "GenerationReferenceImage_generationRunId_fkey"
+      FOREIGN KEY ("generationRunId") REFERENCES "GenerationRun" ("id")
+      ON DELETE CASCADE ON UPDATE CASCADE
+  )`,
   `CREATE INDEX IF NOT EXISTS "Project_createdAt_idx" ON "Project"("createdAt")`,
   `CREATE INDEX IF NOT EXISTS "ImageSession_projectId_idx" ON "ImageSession"("projectId")`,
   `CREATE INDEX IF NOT EXISTS "Asset_imageSessionId_idx" ON "Asset"("imageSessionId")`,
@@ -90,6 +102,7 @@ const schemaStatements = [
   `CREATE INDEX IF NOT EXISTS "GenerationRun_imageSessionId_idx" ON "GenerationRun"("imageSessionId")`,
   `CREATE INDEX IF NOT EXISTS "GenerationRun_sourceAssetId_idx" ON "GenerationRun"("sourceAssetId")`,
   `CREATE INDEX IF NOT EXISTS "GenerationRun_status_idx" ON "GenerationRun"("status")`,
+  `CREATE INDEX IF NOT EXISTS "GenerationReferenceImage_generationRunId_idx" ON "GenerationReferenceImage"("generationRunId")`,
 ];
 
 export async function initializeDatabase() {

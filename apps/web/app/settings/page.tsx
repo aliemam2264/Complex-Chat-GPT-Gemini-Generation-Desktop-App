@@ -2,12 +2,18 @@
 
 import { useEffect, useState } from "react";
 
-import { Bot, Banana, Gauge, LoaderCircle, Settings, SlidersHorizontal } from "lucide-react";
+import { Bot, Banana, FileText, Gauge, LoaderCircle, Settings, SlidersHorizontal } from "lucide-react";
 
 import { ProjectSidebar } from "@/components/projects/project-sidebar";
 import { ProviderCard } from "@/components/settings/provider-card";
+import { PromptPresetEditor } from "@/components/settings/prompt-preset-editor";
 
 import { useGenerationDefaults } from "@/hooks/use-generation-defaults";
+import {
+  usePromptPresets,
+  useResetPromptPreset,
+  useSavePromptPreset,
+} from "@/hooks/use-prompt-presets";
 
 import {
   useGenerationRuntimeSettings,
@@ -89,6 +95,10 @@ export default function SettingsPage() {
   const connectGemini = useConnectGeminiSettings();
 
   const { preserveMode, preserveEverythingElse, setPreserveMode, setPreserveEverythingElse } = useGenerationDefaults();
+
+  const promptPresets = usePromptPresets();
+  const savePromptPreset = useSavePromptPreset();
+  const resetPromptPreset = useResetPromptPreset();
 
   const [waitingForGeminiLogin, setWaitingForGeminiLogin] = useState(false);
 
@@ -183,6 +193,16 @@ export default function SettingsPage() {
     }
   }
 
+  async function handleSavePromptPreset(mode: Parameters<typeof setPreserveMode>[0], prompt: string) {
+    await savePromptPreset.mutateAsync({ mode, prompt });
+  }
+
+  async function handleResetPromptPreset(mode: Parameters<typeof setPreserveMode>[0]) {
+    await resetPromptPreset.mutateAsync(mode);
+  }
+
+  const promptPresetError = savePromptPreset.error ?? resetPromptPreset.error ?? promptPresets.error;
+
   return (
     <main className="flex h-screen overflow-hidden bg-[var(--background)] text-[var(--foreground)]">
       <ProjectSidebar />
@@ -222,7 +242,7 @@ export default function SettingsPage() {
                 </div>
 
                 <div className="flex items-center gap-1 rounded-xl border border-[var(--border)] bg-[var(--background)] p-1">
-                  {(["STRICT", "BALANCED", "CREATIVE"] as const).map((mode) => {
+                  {(["STRICT", "BALANCED", "CREATIVE", "NO_RESTRICTION"] as const).map((mode) => {
                     const active = preserveMode === mode;
 
                     return (
@@ -237,7 +257,7 @@ export default function SettingsPage() {
                             : "text-[var(--foreground-muted)] hover:bg-[var(--surface-2)] hover:text-[var(--foreground)]",
                         ].join(" ")}
                       >
-                        {mode.charAt(0) + mode.slice(1).toLowerCase()}
+                        {mode === "NO_RESTRICTION" ? "No Restriction" : mode.charAt(0) + mode.slice(1).toLowerCase()}
                       </button>
                     );
                   })}
@@ -250,29 +270,78 @@ export default function SettingsPage() {
                   <p className="text-sm">Preserve Everything Else</p>
 
                   <p className="mt-1 text-xs text-[var(--foreground-muted)]">
-                    Keep unrelated parts of the render unchanged by default.
+                    {preserveMode === "NO_RESTRICTION"
+                      ? "Ignored while No Restriction is selected."
+                      : "Keep unrelated parts of the render unchanged by default."}
                   </p>
                 </div>
 
                 <button
                   type="button"
                   role="switch"
-                  aria-checked={preserveEverythingElse}
+                  aria-checked={preserveMode === "NO_RESTRICTION" ? false : preserveEverythingElse}
                   onClick={() => setPreserveEverythingElse(!preserveEverythingElse)}
+                  disabled={preserveMode === "NO_RESTRICTION"}
                   className={[
-                    "relative inline-flex h-6 w-11 shrink-0 items-center rounded-full transition-colors",
-                    preserveEverythingElse ? "bg-emerald-500" : "bg-[var(--surface-3)]",
+                    "relative inline-flex h-6 w-11 shrink-0 items-center rounded-full transition-colors disabled:cursor-not-allowed disabled:opacity-35",
+                    preserveMode !== "NO_RESTRICTION" && preserveEverythingElse
+                      ? "bg-emerald-500"
+                      : "bg-[var(--surface-3)]",
                   ].join(" ")}
                 >
                   <span
                     className={[
                       "h-5 w-5 rounded-full bg-white shadow-sm transition-transform",
-                      preserveEverythingElse ? "translate-x-[22px]" : "translate-x-0.5",
+                      preserveMode !== "NO_RESTRICTION" && preserveEverythingElse ? "translate-x-[22px]" : "translate-x-0.5",
                     ].join(" ")}
                   />
                 </button>
               </div>
             </div>
+          </section>
+
+          {/* Prompt Presets */}
+          <section className="mt-10">
+            <div className="mb-4 flex items-start justify-between gap-4">
+              <div>
+                <div className="flex items-center gap-2">
+                  <FileText size={15} strokeWidth={1.8} className="text-[var(--foreground-muted)]" />
+                  <h2 className="text-sm font-medium">Prompt Presets</h2>
+                </div>
+
+                <p className="mt-1 max-w-2xl text-xs leading-5 text-[var(--foreground-muted)]">
+                  Customize the instruction Eskander adds for each edit mode. Reset to Default removes the user
+                  override and immediately returns that mode to its hardcoded prompt.
+                </p>
+              </div>
+            </div>
+
+            {promptPresets.isLoading ? (
+              <div className="flex min-h-28 items-center justify-center rounded-2xl border border-[var(--border)] bg-[var(--surface-1)]">
+                <LoaderCircle size={16} strokeWidth={1.8} className="animate-spin text-[var(--foreground-muted)]" />
+              </div>
+            ) : (
+              <div className="space-y-3">
+                {promptPresets.data?.presets.map((preset) => (
+                  <PromptPresetEditor
+                    key={preset.mode}
+                    preset={preset}
+                    saving={savePromptPreset.isPending && savePromptPreset.variables?.mode === preset.mode}
+                    resetting={resetPromptPreset.isPending && resetPromptPreset.variables === preset.mode}
+                    onSave={(prompt) => handleSavePromptPreset(preset.mode, prompt)}
+                    onReset={() => handleResetPromptPreset(preset.mode)}
+                  />
+                ))}
+              </div>
+            )}
+
+            {promptPresetError && (
+              <div className="mt-3 rounded-xl border border-red-500/30 bg-red-500/5 px-4 py-3 text-xs text-red-500">
+                {promptPresetError instanceof Error
+                  ? promptPresetError.message
+                  : "Could not update prompt presets."}
+              </div>
+            )}
           </section>
 
           {/* Generation Performance */}
