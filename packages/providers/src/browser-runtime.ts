@@ -4,6 +4,17 @@ import { join } from "node:path";
 
 import { chromium } from "playwright";
 
+type BrowserRuntimeSource =
+  | "explicit"
+  | "system-chrome"
+  | "system-edge"
+  | "playwright";
+
+type BrowserRuntime = {
+  executablePath: string;
+  source: BrowserRuntimeSource;
+};
+
 function getPlaywrightExecutablePath(): string | null {
   try {
     const executablePath = chromium.executablePath();
@@ -14,7 +25,7 @@ function getPlaywrightExecutablePath(): string | null {
   }
 }
 
-function getWindowsBrowserCandidates(): string[] {
+function getWindowsChromeCandidates(): string[] {
   if (process.platform !== "win32") {
     return [];
   }
@@ -33,6 +44,19 @@ function getWindowsBrowserCandidates(): string[] {
     programFilesX86
       ? join(programFilesX86, "Google", "Chrome", "Application", "chrome.exe")
       : "",
+  ].filter(Boolean);
+}
+
+function getWindowsEdgeCandidates(): string[] {
+  if (process.platform !== "win32") {
+    return [];
+  }
+
+  const localAppData = process.env.LOCALAPPDATA;
+  const programFiles = process.env.PROGRAMFILES;
+  const programFilesX86 = process.env["PROGRAMFILES(X86)"];
+
+  return [
     localAppData
       ? join(localAppData, "Microsoft", "Edge", "Application", "msedge.exe")
       : "",
@@ -45,7 +69,7 @@ function getWindowsBrowserCandidates(): string[] {
   ].filter(Boolean);
 }
 
-function getUnixBrowserCandidates(): string[] {
+function getUnixChromeCandidates(): string[] {
   if (process.platform === "win32") {
     return [];
   }
@@ -53,43 +77,104 @@ function getUnixBrowserCandidates(): string[] {
   return [
     "/usr/bin/google-chrome",
     "/usr/bin/google-chrome-stable",
-    "/usr/bin/chromium",
-    "/usr/bin/chromium-browser",
     "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome",
+  ];
+}
+
+function getUnixEdgeCandidates(): string[] {
+  if (process.platform === "win32") {
+    return [];
+  }
+
+  return [
     "/Applications/Microsoft Edge.app/Contents/MacOS/Microsoft Edge",
   ];
 }
 
-export function resolveBrowserExecutablePath(): string | null {
+function firstExisting(candidates: string[]): string | null {
+  return candidates.find((candidate) => existsSync(candidate)) ?? null;
+}
+
+/**
+ * IMPORTANT:
+ *
+ * Prefer a normal installed browser over Playwright's Chrome-for-Testing.
+ *
+ * ChatGPT and Gemini both work in development with a normal Chrome profile,
+ * while Chrome-for-Testing can successfully load/authenticate the websites but
+ * still fail to receive model responses in packaged builds.
+ *
+ * Windows normally ships with Edge, so a clean Windows install still has a
+ * supported system-browser fallback without requiring the user to install
+ * Google Chrome separately.
+ */
+export function resolveBrowserRuntime(): BrowserRuntime | null {
   const explicitPath = process.env.ESKANDER_BROWSER_EXECUTABLE?.trim();
 
   if (explicitPath && existsSync(explicitPath)) {
-    return explicitPath;
+    return {
+      executablePath: explicitPath,
+      source: "explicit",
+    };
+  }
+
+  const systemChrome = firstExisting([
+    ...getWindowsChromeCandidates(),
+    ...getUnixChromeCandidates(),
+  ]);
+
+  if (systemChrome) {
+    return {
+      executablePath: systemChrome,
+      source: "system-chrome",
+    };
+  }
+
+  const systemEdge = firstExisting([
+    ...getWindowsEdgeCandidates(),
+    ...getUnixEdgeCandidates(),
+  ]);
+
+  if (systemEdge) {
+    return {
+      executablePath: systemEdge,
+      source: "system-edge",
+    };
   }
 
   const playwrightPath = getPlaywrightExecutablePath();
 
   if (playwrightPath) {
-    return playwrightPath;
+    console.warn(
+      "[BrowserRuntime] No system Chrome/Edge found. Falling back to bundled Playwright browser.",
+    );
+
+    return {
+      executablePath: playwrightPath,
+      source: "playwright",
+    };
   }
 
-  const fallbackPath = [
-    ...getWindowsBrowserCandidates(),
-    ...getUnixBrowserCandidates(),
-  ].find((candidate) => existsSync(candidate));
+  return null;
+}
 
-  return fallbackPath ?? null;
+export function resolveBrowserExecutablePath(): string | null {
+  return resolveBrowserRuntime()?.executablePath ?? null;
 }
 
 export function requireBrowserExecutablePath(): string {
-  const executablePath = resolveBrowserExecutablePath();
+  const runtime = resolveBrowserRuntime();
 
-  if (executablePath) {
-    return executablePath;
+  if (runtime) {
+    console.log(
+      `[BrowserRuntime] Using ${runtime.source}: ${runtime.executablePath}`,
+    );
+
+    return runtime.executablePath;
   }
 
   throw new Error(
-    "Browser runtime is not installed. Run `npm run browser:install` once, then try again.",
+    "No supported browser runtime was found. Install Google Chrome or Microsoft Edge, or run `npm run browser:install`.",
   );
 }
 
@@ -128,9 +213,6 @@ export async function openDetachedBrowser(
 
       settled = true;
 
-      // Keep an error listener after the spawn event as well. Without one,
-      // a later ChildProcess error becomes an uncaught exception and can kill
-      // the entire API process.
       child.removeListener("error", fail);
       child.on("error", (error) => {
         console.error("[BrowserRuntime] Detached browser process error:", error);

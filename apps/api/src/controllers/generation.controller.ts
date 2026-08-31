@@ -46,7 +46,13 @@ const updatePromptSchema = z.object({
   prompt: z.string().trim().min(10).max(12000),
 });
 
-const ACTIVE_GENERATION_STATUSES = ["PENDING", "PROMPTING", "PROMPT_READY", "GENERATING", "DOWNLOADING"] as const;
+const ACTIVE_GENERATION_STATUSES = [
+  "PENDING",
+  "PROMPTING",
+  "PROMPT_READY",
+  "GENERATING",
+  "DOWNLOADING",
+] as const;
 
 async function markGenerationCanceled(generationId: string) {
   const now = new Date();
@@ -68,6 +74,7 @@ async function markGenerationCanceled(generationId: string) {
     },
   });
 }
+
 
 /* -------------------------------------------------------------------------- */
 /*                                Create Prompt                               */
@@ -374,7 +381,10 @@ export async function getGenerationActivity(request: Request, response: Response
         },
         {
           status: "FAILED",
-          OR: [{ imageProvider: "GEMINI_BROWSER" }, { progressStage: "INTERRUPTED" }],
+          OR: [
+            { imageProvider: "GEMINI_BROWSER" },
+            { progressStage: "INTERRUPTED" },
+          ],
           updatedAt: { gte: recentThreshold },
         },
       ],
@@ -442,7 +452,10 @@ export async function cancelGeneration(request: Request<GenerationParams>, respo
   promptJobManager.cancel(generation.id);
   imageJobManager.cancel(generation.id);
 
-  await Promise.all([promptJobManager.waitForIdle(generation.id), imageJobManager.waitForIdle(generation.id)]);
+  await Promise.all([
+    promptJobManager.waitForIdle(generation.id),
+    imageJobManager.waitForIdle(generation.id),
+  ]);
 
   const now = new Date();
 
@@ -709,6 +722,42 @@ export async function getChatGPTStatus(_request: Request, response: Response) {
   });
 }
 
+function buildLocalFallbackPrompt(input: {
+  instruction: string;
+  preserveMode: "STRICT" | "BALANCED" | "CREATIVE";
+  preserveEverythingElse: boolean;
+}) {
+  const modeInstruction = {
+    STRICT:
+      "Make only the requested change. Preserve the source image as strictly as possible and do not reinterpret unrelated content.",
+    BALANCED:
+      "Make the requested change naturally while preserving the source composition, identity, perspective, proportions, and unrelated content.",
+    CREATIVE:
+      "Apply the requested change with broader visual freedom where useful, while preserving the recognizable identity and overall composition of the source image.",
+  }[input.preserveMode];
+
+  const preserveInstruction = input.preserveEverythingElse
+    ? "Everything not explicitly requested by the user must remain unchanged."
+    : "Avoid unnecessary changes to unrelated parts of the source image.";
+
+  return `
+Edit the attached source image according to the user request below.
+
+USER REQUEST:
+${input.instruction}
+
+EDITING RULES:
+- ${modeInstruction}
+- ${preserveInstruction}
+- Keep perspective, scale, geometry, subject identity, layout, and composition consistent unless the user explicitly asks to change them.
+- Keep unaffected objects, materials, colors, lighting, text, logos, and background content unchanged unless required by the request.
+- Produce a clean, coherent, realistic final image without duplicated elements, warped geometry, accidental text, artifacts, or watermarks.
+- Match the true visual type and style of the source image instead of forcing a specific design category.
+
+Return the final edited image directly. Do not return explanations, analysis, or instructions.
+`.trim();
+}
+
 /* -------------------------------------------------------------------------- */
 /*                            Prompt Background Job                           */
 /* -------------------------------------------------------------------------- */
@@ -751,31 +800,63 @@ async function runPromptJob(generationId: string, signal: AbortSignal) {
       return;
     }
 
-    const refinedPrompt = await chatGPTPromptProvider.generate({
-      instruction: generation.userInstruction,
-      preserveMode: generation.preserveMode,
-      preserveEverythingElse: generation.preserveEverythingElse,
-      sourceImagePath: join(getStorageRoot(), generation.sourceAsset.filePath),
-      sourceMimeType: generation.sourceAsset.mimeType,
-      signal,
-      onProgress: async ({ stage, message }) => {
-        if (signal.aborted) {
-          return;
-        }
+    let refinedPrompt = "";
 
-        await prisma.generationRun.updateMany({
-          where: {
-            id: generation.id,
-            status: "PROMPTING",
-          },
-          data: {
-            progressStage: stage,
-            progressMessage: message,
-            errorMessage: null,
-          },
-        });
-      },
-    });
+    try {
+      refinedPrompt = await chatGPTPromptProvider.generate({
+        instruction: generation.userInstruction,
+        preserveMode: generation.preserveMode,
+        preserveEverythingElse: generation.preserveEverythingElse,
+        sourceImagePath: join(getStorageRoot(), generation.sourceAsset.filePath),
+        sourceMimeType: generation.sourceAsset.mimeType,
+        signal,
+        onProgress: async ({ stage, message }) => {
+          if (signal.aborted) {
+            return;
+          }
+
+          await prisma.generationRun.updateMany({
+            where: {
+              id: generation.id,
+              status: "PROMPTING",
+            },
+            data: {
+              progressStage: stage,
+              progressMessage: message,
+              errorMessage: null,
+            },
+          });
+        },
+      });
+    } catch (promptError) {
+      if (signal.aborted) {
+        await markGenerationCanceled(generation.id);
+        return;
+      }
+
+      console.warn(
+        `[PromptJob] ${generation.id} ChatGPT refinement unavailable; continuing with local fallback prompt:`,
+        promptError,
+      );
+
+      refinedPrompt = buildLocalFallbackPrompt({
+        instruction: generation.userInstruction,
+        preserveMode: generation.preserveMode,
+        preserveEverythingElse: generation.preserveEverythingElse,
+      });
+
+      await prisma.generationRun.updateMany({
+        where: {
+          id: generation.id,
+          status: "PROMPTING",
+        },
+        data: {
+          progressStage: "CHATGPT_FALLBACK",
+          progressMessage: "ChatGPT refinement unavailable. Continuing to Gemini with a safe local prompt...",
+          errorMessage: null,
+        },
+      });
+    }
 
     if (signal.aborted) {
       await markGenerationCanceled(generation.id);
@@ -783,7 +864,11 @@ async function runPromptJob(generationId: string, signal: AbortSignal) {
     }
 
     if (!refinedPrompt.trim()) {
-      throw new Error("ChatGPT returned an empty prompt.");
+      refinedPrompt = buildLocalFallbackPrompt({
+        instruction: generation.userInstruction,
+        preserveMode: generation.preserveMode,
+        preserveEverythingElse: generation.preserveEverythingElse,
+      });
     }
 
     const handoff = await prisma.generationRun.updateMany({
@@ -817,24 +902,6 @@ async function runPromptJob(generationId: string, signal: AbortSignal) {
   } catch (error) {
     if (signal.aborted) {
       await markGenerationCanceled(generation.id);
-      return;
-    }
-
-    if (error instanceof ChatGPTLoginRequiredError) {
-      await prisma.generationRun.updateMany({
-        where: {
-          id: generation.id,
-          status: { not: "CANCELED" },
-        },
-        data: {
-          status: "FAILED",
-          imageProvider: null,
-          progressStage: "CHATGPT_LOGIN_REQUIRED",
-          progressMessage: error.message,
-          errorMessage: error.message,
-        },
-      });
-
       return;
     }
 
@@ -929,7 +996,8 @@ async function runGeminiJob(generationId: string, signal: AbortSignal) {
           where: { id: generation.id, status: "GENERATING" },
           data: {
             progressStage: "GEMINI_GENERATING",
-            progressMessage: attempt === 1 ? "Gemini is editing your render..." : "Retrying Gemini generation...",
+            progressMessage:
+              attempt === 1 ? "Gemini is editing your render..." : "Retrying Gemini generation...",
             errorMessage: null,
           },
         });
@@ -949,6 +1017,20 @@ async function runGeminiJob(generationId: string, signal: AbortSignal) {
         }
 
         if (error instanceof GeminiLoginRequiredError) {
+          throw error;
+        }
+
+        const message = error instanceof Error ? error.message : "";
+        const submissionFailure = /did not accept the prompt|prompt.*submit|composer.*prompt|source image upload/i.test(message);
+
+        /*
+         * The provider already performs three verified send attempts on the
+         * same Gemini page. Re-running the entire upload/browser workflow for
+         * a deterministic submit/upload failure only wastes time and can
+         * create duplicate work. Leave transient generation failures eligible
+         * for the existing one automatic retry.
+         */
+        if (submissionFailure) {
           throw error;
         }
 

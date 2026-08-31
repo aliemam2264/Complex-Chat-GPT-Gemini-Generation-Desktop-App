@@ -62,6 +62,9 @@ export class ChatGPTBrowserPromptProvider implements PromptProvider {
 
       const executablePath = requireBrowserExecutablePath();
 
+      console.log(`[ChatGPT] Browser executable: ${executablePath}`);
+      console.log(`[ChatGPT] Profile directory: ${this.userDataDirectory}`);
+
       const context = await chromium.launchPersistentContext(this.userDataDirectory, {
         executablePath,
         headless: false,
@@ -76,6 +79,10 @@ export class ChatGPTBrowserPromptProvider implements PromptProvider {
         args: [
           "--profile-directory=Default",
           "--disable-blink-features=AutomationControlled",
+          "--disable-background-timer-throttling",
+          "--disable-backgrounding-occluded-windows",
+          "--disable-renderer-backgrounding",
+          "--disable-features=CalculateNativeWinOcclusion",
           "--lang=en-US",
           "--window-size=1440,1000",
           "--window-position=-10000,-10000",
@@ -455,33 +462,103 @@ export class ChatGPTBrowserPromptProvider implements PromptProvider {
   }
 
   private async waitForAttachment(page: Page): Promise<void> {
-    console.log("[ChatGPT] Waiting for image attachment...");
+    console.log("[ChatGPT] Waiting for image attachment to finish uploading...");
 
-    /*
-     * There is currently no reliable public DOM signal
-     * representing a completed ChatGPT file upload.
-     *
-     * Give architectural renders a short settling period,
-     * then explicitly check for known upload errors.
-     */
-    await page.waitForTimeout(2500);
+    const deadline = Date.now() + 45_000;
+    let sawAttachment = false;
+    let lastProgressLogAt = 0;
 
-    const bodyText = await page
-      .locator("body")
-      .innerText()
-      .catch(() => "");
+    const attachmentSelectors = [
+      '[data-testid*="attachment"]',
+      '[data-testid*="file"]',
+      'button[aria-label*="Remove file" i]',
+      'button[aria-label*="Remove attachment" i]',
+      'button[aria-label*="إزالة الملف"]',
+      'button[aria-label*="إزالة المرفق"]',
+      'img[src^="blob:"]',
+    ];
 
-    const normalized = bodyText.toLowerCase();
+    const uploadBusySelectors = [
+      '[aria-busy="true"]',
+      '[role="progressbar"]',
+      '[data-testid*="upload"][data-state="loading"]',
+      '[data-testid*="attachment"][data-state="loading"]',
+    ];
 
-    if (
-      normalized.includes("failed to upload") ||
-      normalized.includes("upload failed") ||
-      normalized.includes("couldn't upload")
-    ) {
-      throw new Error("ChatGPT failed to upload the source image.");
+    while (Date.now() < deadline) {
+      if (page.isClosed()) {
+        throw new Error("ChatGPT page closed while the source image was uploading.");
+      }
+
+      const bodyText = await page.locator("body").innerText().catch(() => "");
+      const normalized = bodyText.toLowerCase();
+
+      if (
+        normalized.includes("failed to upload") ||
+        normalized.includes("upload failed") ||
+        normalized.includes("couldn't upload") ||
+        normalized.includes("could not upload")
+      ) {
+        throw new Error("ChatGPT failed to upload the source image.");
+      }
+
+      for (const selector of attachmentSelectors) {
+        const locator = page.locator(selector);
+        const count = await locator.count().catch(() => 0);
+
+        if (count > 0) {
+          const visible = await locator.last().isVisible().catch(() => false);
+          if (visible) {
+            sawAttachment = true;
+            break;
+          }
+        }
+      }
+
+      let busy = false;
+      for (const selector of uploadBusySelectors) {
+        const locator = page.locator(selector);
+        const count = await locator.count().catch(() => 0);
+
+        if (count > 0) {
+          for (let i = Math.max(0, count - 3); i < count; i++) {
+            if (await locator.nth(i).isVisible().catch(() => false)) {
+              busy = true;
+              break;
+            }
+          }
+        }
+
+        if (busy) break;
+      }
+
+      const hasUploadingText =
+        normalized.includes("uploading") ||
+        normalized.includes("processing upload") ||
+        normalized.includes("جارٍ التحميل") ||
+        normalized.includes("جاري التحميل");
+
+      if (sawAttachment && !busy && !hasUploadingText) {
+        await page.waitForTimeout(700);
+        console.log("[ChatGPT] Source image attachment is ready.");
+        return;
+      }
+
+      if (Date.now() - lastProgressLogAt >= 5_000) {
+        lastProgressLogAt = Date.now();
+        console.log(
+          `[ChatGPT] Attachment still settling... attachment=${sawAttachment} busy=${busy} uploadingText=${hasUploadingText}`,
+        );
+      }
+
+      await page.waitForTimeout(500);
     }
 
-    console.log("[ChatGPT] Source image attached.");
+    // Some ChatGPT layouts expose no stable attachment marker. A long wait is
+    // safer than the previous fixed 2.5s delay, especially in packaged builds.
+    console.warn(
+      "[ChatGPT] Attachment readiness marker was not detected before timeout; continuing after 45s settle window.",
+    );
   }
 
   // ---------------------------------------------------------------------------
@@ -553,13 +630,11 @@ The final prompt should:
   private async submitPrompt(page: Page, composer: Locator, prompt: string): Promise<void> {
     console.log("[ChatGPT] Entering prompt...");
 
-    await composer.click({
-      force: true,
-    });
+    const userMessages = page.locator('[data-message-author-role="user"]');
+    const initialUserCount = await userMessages.count().catch(() => 0);
 
+    await composer.click({ force: true });
     await composer.fill(prompt);
-
-    await page.waitForTimeout(300);
 
     const sendSelectors = [
       '[data-testid="send-button"]',
@@ -568,115 +643,272 @@ The final prompt should:
       'button[type="submit"]',
     ];
 
-    for (const selector of sendSelectors) {
-      const locator = page.locator(selector);
+    const deadline = Date.now() + 35_000;
+    let selectedSendButton: Locator | null = null;
 
-      if ((await locator.count()) === 0) {
-        continue;
+    while (Date.now() < deadline && !selectedSendButton) {
+      for (const selector of sendSelectors) {
+        const locator = page.locator(selector);
+        const count = await locator.count().catch(() => 0);
+
+        for (let index = count - 1; index >= 0; index--) {
+          const candidate = locator.nth(index);
+          const visible = await candidate.isVisible().catch(() => false);
+          const disabled = await candidate.isDisabled().catch(() => true);
+
+          if (visible && !disabled) {
+            selectedSendButton = candidate;
+            break;
+          }
+        }
+
+        if (selectedSendButton) break;
       }
 
-      const candidate = locator.last();
-
-      try {
-        if (!(await candidate.isVisible())) {
-          continue;
-        }
-
-        const disabled = await candidate.isDisabled().catch(() => false);
-
-        if (disabled) {
-          continue;
-        }
-
-        await candidate.click({
-          force: true,
-          timeout: 5000,
-        });
-
-        console.log("[ChatGPT] Prompt sent.");
-
-        return;
-      } catch {
-        // Try next selector.
+      if (!selectedSendButton) {
+        await page.waitForTimeout(500);
       }
     }
 
-    console.log("[ChatGPT] Send button not found. Falling back to Enter.");
+    if (selectedSendButton) {
+      await selectedSendButton.click({ force: true, timeout: 5000 });
+      console.log("[ChatGPT] Send button clicked. Verifying submission...");
+    } else {
+      console.warn("[ChatGPT] Send button never became enabled. Trying Enter fallback.");
+      await composer.press("Enter");
+    }
 
-    await composer.press("Enter");
+    const verifyDeadline = Date.now() + 12_000;
 
-    console.log("[ChatGPT] Prompt sent.");
+    while (Date.now() < verifyDeadline) {
+      const currentUserCount = await userMessages.count().catch(() => 0);
+      const composerText = (await composer.innerText().catch(() => "")).trim();
+
+      if (currentUserCount > initialUserCount || composerText.length === 0) {
+        console.log("[ChatGPT] Prompt submission confirmed.");
+        return;
+      }
+
+      await page.waitForTimeout(400);
+    }
+
+    console.warn("[ChatGPT] First submit attempt was not confirmed. Retrying with Enter...");
+    await composer.press("Enter").catch(() => undefined);
+
+    const retryDeadline = Date.now() + 8_000;
+    while (Date.now() < retryDeadline) {
+      const currentUserCount = await userMessages.count().catch(() => 0);
+      const composerText = (await composer.innerText().catch(() => "")).trim();
+
+      if (currentUserCount > initialUserCount || composerText.length === 0) {
+        console.log("[ChatGPT] Prompt submission confirmed after retry.");
+        return;
+      }
+
+      await page.waitForTimeout(400);
+    }
+
+    await this.dumpDebugInfo(page).catch(() => undefined);
+    throw new Error("ChatGPT prompt could not be submitted after the image upload finished.");
   }
 
   // ---------------------------------------------------------------------------
   // Assistant Response
   // ---------------------------------------------------------------------------
 
-  private async waitForAssistantResponse(page: Page, initialAssistantCount: number): Promise<string> {
+  private async readConversationApiAssistant(page: Page): Promise<string> {
+    const match = page.url().match(/\/c\/([^/?#]+)/);
+
+    if (!match?.[1]) {
+      return "";
+    }
+
+    const conversationId = match[1];
+
+    return page
+      .evaluate(async (id) => {
+        try {
+          const response = await fetch(`/backend-api/conversation/${id}`, {
+            method: "GET",
+            credentials: "include",
+            cache: "no-store",
+          });
+
+          if (!response.ok) {
+            return "";
+          }
+
+          const data = await response.json();
+          const mapping = data?.mapping && typeof data.mapping === "object" ? Object.values(data.mapping) : [];
+
+          const assistantMessages = mapping
+            .map((node: any) => node?.message)
+            .filter((message: any) => message?.author?.role === "assistant")
+            .sort((a: any, b: any) => Number(a?.create_time ?? 0) - Number(b?.create_time ?? 0));
+
+          const last = assistantMessages.at(-1);
+          const parts = Array.isArray(last?.content?.parts) ? last.content.parts : [];
+
+          return parts
+            .filter((part: unknown) => typeof part === "string")
+            .join("\n")
+            .trim();
+        } catch {
+          return "";
+        }
+      }, conversationId)
+      .catch(() => "");
+  }
+
+  private async waitForAssistantResponse(
+    page: Page,
+    initialAssistantCount: number,
+    initialAssistantText: string,
+    initialTurnCount: number,
+  ): Promise<string> {
     console.log("[ChatGPT] Waiting for prompt result...");
 
-    const assistantMessages = page.locator('[data-message-author-role="assistant"]');
+    /*
+     * ChatGPT has changed its conversation DOM more than once.
+     * Do not rely on data-message-author-role alone. The current UI can render
+     * conversation turns without that attribute, which made production wait
+     * forever even though the response was already visible.
+     */
+    const assistantMessages = page.locator(
+      [
+        '[data-message-author-role="assistant"]',
+        '[data-turn="assistant"]',
+        'article[data-turn="assistant"]',
+      ].join(","),
+    );
 
-    const deadline = Date.now() + 3 * 60 * 1000;
+    const conversationTurns = page.locator('article[data-testid^="conversation-turn-"]');
+    const fallbackConversationTurns = page.locator('[data-testid^="conversation-turn-"]');
+
+    const deadline = Date.now() + 60_000;
+    let previousCandidate = "";
+    let stableIterations = 0;
+    let lastProgressLogAt = 0;
+    let lastApiProbeAt = 0;
 
     while (Date.now() < deadline) {
-      const count = await assistantMessages.count();
+      if (page.isClosed()) {
+        throw new Error("ChatGPT page closed while waiting for the refined prompt.");
+      }
 
-      if (count > initialAssistantCount) {
+      const count = await assistantMessages.count().catch(() => 0);
+      let text = "";
+      let source = "none";
+
+      if (count > 0) {
         const lastMessage = assistantMessages.last();
+        const markdown = lastMessage.locator(".markdown");
 
-        let previousText = "";
-        let stableIterations = 0;
-
-        while (Date.now() < deadline) {
-          const markdown = lastMessage.locator(".markdown");
-
-          let text = "";
-
-          if ((await markdown.count()) > 0) {
-            text = (
-              await markdown
-                .last()
-                .innerText()
-                .catch(() => "")
-            ).trim();
-          } else {
-            text = (await lastMessage.innerText().catch(() => "")).trim();
-          }
-
-          if (text.length > 30 && text === previousText) {
-            stableIterations += 1;
-          } else {
-            stableIterations = 0;
-          }
-
-          previousText = text;
-
-          const stopButton = page.locator(
-            ['[data-testid="stop-button"]', 'button[aria-label*="Stop" i]', 'button[aria-label*="إيقاف"]'].join(","),
-          );
-
-          const generating =
-            (await stopButton.count()) > 0 &&
-            (await stopButton
-              .last()
-              .isVisible()
-              .catch(() => false));
-
-          if (text.length > 30 && stableIterations >= 2 && !generating) {
-            console.log("[ChatGPT] Prompt result received.");
-
-            return text;
-          }
-
-          await page.waitForTimeout(1000);
+        if ((await markdown.count().catch(() => 0)) > 0) {
+          text = (await markdown.last().innerText().catch(() => "")).trim();
+        } else {
+          text = (await lastMessage.innerText().catch(() => "")).trim();
         }
+
+        if (text) {
+          source = "assistant-role";
+        }
+      }
+
+      let turnCount = await conversationTurns.count().catch(() => 0);
+      let turns = conversationTurns;
+
+      if (turnCount === 0) {
+        turns = fallbackConversationTurns;
+        turnCount = await turns.count().catch(() => 0);
+      }
+
+      /*
+       * A successful submit adds a user turn first and then an assistant turn.
+       * If there are at least two new turns, the newest turn is the assistant
+       * response even when ChatGPT no longer exposes data-message-author-role.
+       */
+      if (!text && turnCount >= initialTurnCount + 2) {
+        const candidate = turns.last();
+        const candidateText = (await candidate.innerText().catch(() => "")).trim();
+
+        if (candidateText.length > 30) {
+          text = candidateText;
+          source = "conversation-turn";
+        }
+      }
+
+      /*
+       * Final fallback: read the authenticated conversation JSON. This avoids
+       * DOM-selector drift entirely when the server has already stored the
+       * assistant response. Probe only every few seconds.
+       */
+      if (!text && Date.now() - lastApiProbeAt >= 5_000) {
+        lastApiProbeAt = Date.now();
+        const apiText = await this.readConversationApiAssistant(page);
+
+        if (apiText.length > 30 && apiText !== initialAssistantText) {
+          text = apiText;
+          source = "conversation-api";
+        }
+      }
+
+      const isNewResponse =
+        text.length > 30 &&
+        (count > initialAssistantCount || text !== initialAssistantText);
+
+      if (isNewResponse) {
+        if (text === previousCandidate) {
+          stableIterations += 1;
+        } else {
+          previousCandidate = text;
+          stableIterations = 0;
+          console.log(`[ChatGPT] Response candidate detected via ${source}.`);
+        }
+
+        const stopButton = page.locator(
+          [
+            '[data-testid="stop-button"]',
+            'button[aria-label*="Stop" i]',
+            'button[aria-label*="إيقاف"]',
+          ].join(","),
+        );
+
+        const generating =
+          (await stopButton.count().catch(() => 0)) > 0 &&
+          (await stopButton.last().isVisible().catch(() => false));
+
+        if (stableIterations >= 2 && !generating) {
+          console.log(`[ChatGPT] Prompt result received via ${source}.`);
+          return text;
+        }
+      }
+
+      const bodyText = await page.locator("body").innerText().catch(() => "");
+      const normalized = bodyText.toLowerCase();
+
+      if (
+        normalized.includes("something went wrong") ||
+        normalized.includes("there was an error generating a response") ||
+        normalized.includes("error in message stream") ||
+        normalized.includes("network error") ||
+        normalized.includes("حدث خطأ")
+      ) {
+        throw new Error("ChatGPT returned an error while refining the prompt.");
+      }
+
+      if (Date.now() - lastProgressLogAt >= 10_000) {
+        lastProgressLogAt = Date.now();
+        console.log(
+          `[ChatGPT] Still waiting for response... assistantCount=${count} initial=${initialAssistantCount} turnCount=${turnCount} initialTurns=${initialTurnCount} textLength=${text.length}`,
+        );
       }
 
       await page.waitForTimeout(1000);
     }
 
-    throw new Error("ChatGPT prompt generation timed out.");
+    await this.dumpDebugInfo(page).catch(() => undefined);
+    throw new Error("ChatGPT prompt generation timed out after 60 seconds.");
   }
 
   private cleanResponse(text: string): string {
@@ -746,6 +978,23 @@ The final prompt should:
 
       const assistantMessages = page.locator('[data-message-author-role="assistant"]');
       const initialAssistantCount = await assistantMessages.count();
+      const initialAssistantText =
+        initialAssistantCount > 0
+          ? (await assistantMessages.last().innerText().catch(() => "")).trim()
+          : "";
+
+      let conversationTurns = page.locator('article[data-testid^="conversation-turn-"]');
+      let initialTurnCount = await conversationTurns.count().catch(() => 0);
+
+      if (initialTurnCount === 0) {
+        conversationTurns = page.locator('[data-testid^="conversation-turn-"]');
+        initialTurnCount = await conversationTurns.count().catch(() => 0);
+      }
+
+      console.log(
+        `[ChatGPT] Response baseline: assistantCount=${initialAssistantCount} turnCount=${initialTurnCount}`,
+      );
+
       const request = this.buildEditRequest(input);
 
       await this.submitPrompt(page, composer, request);
@@ -755,7 +1004,12 @@ The final prompt should:
         message: "ChatGPT is analyzing the render and building the prompt...",
       });
 
-      const response = await this.waitForAssistantResponse(page, initialAssistantCount);
+      const response = await this.waitForAssistantResponse(
+        page,
+        initialAssistantCount,
+        initialAssistantText,
+        initialTurnCount,
+      );
       const cleaned = this.cleanResponse(response);
 
       if (!cleaned) {

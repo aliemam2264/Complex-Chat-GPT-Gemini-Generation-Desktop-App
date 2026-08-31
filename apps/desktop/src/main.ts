@@ -174,7 +174,7 @@ function pipeProcessLogs(
   });
 }
 
-async async function spawnNodeRuntime(
+async function spawnNodeRuntime(
   scriptPath: string,
   cwd: string,
   env: NodeJS.ProcessEnv,
