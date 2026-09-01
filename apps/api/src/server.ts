@@ -35,12 +35,6 @@ async function bootstrap() {
 
   api.disable("x-powered-by");
 
-  api.use("/storage", express.static(getStorageRoot(), {
-    fallthrough: false,
-    immutable: false,
-    maxAge: 0,
-  }));
-
   const configuredWebOrigin = process.env.WEB_URL ?? "http://127.0.0.1:3000";
 
   api.use(
@@ -80,6 +74,14 @@ async function bootstrap() {
       credentials: false,
     }),
   );
+
+  // Apply CORS before static storage too. Flow images are displayed cross-origin
+  // from the local Next.js renderer and may also be fetched by browser APIs.
+  api.use("/storage", express.static(getStorageRoot(), {
+    fallthrough: false,
+    immutable: false,
+    maxAge: 0,
+  }));
 
   api.use(express.json({ limit: "2mb" }));
 

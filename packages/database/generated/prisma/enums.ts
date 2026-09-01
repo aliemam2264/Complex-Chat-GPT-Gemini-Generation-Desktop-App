@@ -11,7 +11,8 @@
 
 export const AssetType = {
   ORIGINAL: 'ORIGINAL',
-  GENERATED: 'GENERATED'
+  GENERATED: 'GENERATED',
+  FLOW_INPUT: 'FLOW_INPUT'
 } as const
 
 export type AssetType = (typeof AssetType)[keyof typeof AssetType]

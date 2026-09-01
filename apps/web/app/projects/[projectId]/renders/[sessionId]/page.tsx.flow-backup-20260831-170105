@@ -630,18 +630,6 @@ export default function RenderWorkspacePage() {
                         >
                           Tree
                         </button>
-
-                        <button
-                          type="button"
-                          onClick={() =>
-                            router.push(
-                              `/projects/${params.projectId}/renders/${params.sessionId}/flow`,
-                            )
-                          }
-                          className="rounded-md px-2.5 py-1 text-xs text-[var(--foreground-subtle)] transition-colors hover:bg-[var(--surface-2)] hover:text-[var(--foreground)]"
-                        >
-                          Flow
-                        </button>
                       </div>
                     </div>
 

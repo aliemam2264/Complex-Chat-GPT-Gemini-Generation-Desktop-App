@@ -1,5 +1,5 @@
-import { randomUUID } from "node:crypto";
-import { mkdir, rm, writeFile } from "node:fs/promises";
+import { createHash, randomUUID } from "node:crypto";
+import { mkdir, readFile, rm, writeFile } from "node:fs/promises";
 import { dirname, join, relative } from "node:path";
 
 import type { Request, Response } from "express";
@@ -26,7 +26,7 @@ type SessionParams = {
   sessionId: string;
 };
 
-const chatGPTPromptProvider = new ChatGPTBrowserPromptProvider({
+export const chatGPTPromptProvider = new ChatGPTBrowserPromptProvider({
   userDataDirectory: join(getStorageRoot(), "browser-profiles", "chatgpt"),
 });
 
@@ -65,6 +65,19 @@ const referenceExtensionByMimeType: Record<string, string> = {
 };
 
 const ACTIVE_GENERATION_STATUSES = ["PENDING", "PROMPTING", "PROMPT_READY", "GENERATING", "DOWNLOADING"] as const;
+
+async function filesHaveSameSha256(firstPath: string, secondPath: string) {
+  try {
+    const [first, second] = await Promise.all([readFile(firstPath), readFile(secondPath)]);
+    if (first.byteLength !== second.byteLength) return false;
+    const firstHash = createHash("sha256").update(first).digest("hex");
+    const secondHash = createHash("sha256").update(second).digest("hex");
+    return firstHash === secondHash;
+  } catch {
+    // This is an extra safety check. Normal provider validation still applies.
+    return false;
+  }
+}
 
 async function markGenerationCanceled(generationId: string) {
   const now = new Date();
@@ -438,6 +451,9 @@ export async function getGenerationHistory(request: Request<SessionParams>, resp
     include: {
       sourceAsset: true,
       outputAsset: true,
+      referenceImages: {
+        orderBy: { sortOrder: "asc" },
+      },
     },
   });
 
@@ -1045,7 +1061,7 @@ async function runPromptJob(generationId: string, signal: AbortSignal) {
   }
 }
 
-async function runGeminiJob(generationId: string, signal: AbortSignal) {
+export async function runGeminiJob(generationId: string, signal: AbortSignal) {
   const generation = await prisma.generationRun.findUnique({
     where: { id: generationId },
     include: {
@@ -1126,7 +1142,7 @@ async function runGeminiJob(generationId: string, signal: AbortSignal) {
           },
         });
 
-        result = await geminiProvider.generate({
+        const candidate = await geminiProvider.generate({
           sourceImagePath,
           referenceImagePaths: generation.referenceImages.map((referenceImage) =>
             join(storageRoot, referenceImage.filePath),
@@ -1136,6 +1152,14 @@ async function runGeminiJob(generationId: string, signal: AbortSignal) {
           signal,
         });
 
+        if (await filesHaveSameSha256(sourceImagePath, candidate.absolutePath)) {
+          await rm(candidate.absolutePath, { force: true }).catch(() => undefined);
+          throw new Error(
+            "Gemini returned the uploaded source image instead of a new generated result. Retrying the generation.",
+          );
+        }
+
+        result = candidate;
         break;
       } catch (error) {
         if (signal.aborted) {

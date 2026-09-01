@@ -103,6 +103,27 @@ export async function apiDelete<TResponse, TBody = unknown>(
   return result.data;
 }
 
+export async function apiPut<TResponse, TBody = unknown>(
+  path: string,
+  body: TBody,
+): Promise<TResponse> {
+  const response = await fetch(`${getApiUrl()}${path}`, {
+    method: "PUT",
+    headers: {
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify(body),
+  });
+
+  const result = await parseJsonResponse<TResponse>(response);
+
+  if (!response.ok) {
+    throw new Error(result?.message ?? "Request failed.");
+  }
+
+  return result.data;
+}
+
 export async function apiPatch<TResponse, TBody = unknown>(
   path: string,
   body: TBody,

@@ -1355,6 +1355,7 @@ export class GeminiBrowserImageProvider implements ImageProvider {
     timeoutMs = 12_000,
   ): Promise<boolean> {
     const deadline = Date.now() + timeoutMs;
+    let composerClearLogged = false;
 
     while (Date.now() < deadline) {
       if (page.isClosed()) {
@@ -1370,9 +1371,16 @@ export class GeminiBrowserImageProvider implements ImageProvider {
         .replace(/\s+/g, " ")
         .trim();
 
-      if (!composerText) {
-        console.log("[Gemini] Submission confirmed because the composer cleared.");
-        return true;
+      if (!composerText && !composerClearLogged) {
+        /*
+         * Composer clearing alone is NOT enough proof. Gemini can clear or
+         * re-mount the contenteditable while an attachment is transitioning,
+         * and the old logic could then wait for/capture the source image even
+         * though no real chat had been created. Keep waiting for network,
+         * generating state, conversation DOM, or a conversation URL instead.
+         */
+        composerClearLogged = true;
+        console.log("[Gemini] Composer cleared; waiting for stronger submission evidence...");
       }
 
       if (await this.isGeminiGenerating(page)) {
@@ -2674,7 +2682,14 @@ ${prompt}
         page,
         input.sourceImagePath,
       );
-      networkCapture.arm();
+
+      /*
+       * Do not arm network-result capture while the source/reference uploads
+       * are still settling. Gemini may request a transformed copy of the
+       * uploaded source after the attachment UI looks ready; capturing that
+       * late attachment request was able to masquerade as a generated result.
+       * We arm the listener only after a VERIFIED prompt submission below.
+       */
 
       /*
        * 4. Re-validate Gemini auth immediately before submission.
@@ -2701,6 +2716,10 @@ ${input.prompt}`
           : input.prompt;
 
       await this.submitPrompt(page, effectivePrompt);
+
+      // From this point on, large image responses belong to an actually
+      // submitted Gemini request rather than to attachment preparation.
+      networkCapture.arm();
 
       /*
        * 6. Wait for this page's generated image.

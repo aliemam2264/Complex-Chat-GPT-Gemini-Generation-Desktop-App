@@ -16,6 +16,7 @@ type ImageSessionCardProps = {
 
 export function ImageSessionCard({ session, selected, onSelect }: ImageSessionCardProps) {
   const original = session.assets.find((asset) => asset.type === "ORIGINAL");
+  const visibleVersionCount = session.assets.filter((asset) => asset.type !== "FLOW_INPUT").length;
 
   if (!original) {
     return null;
@@ -63,7 +64,7 @@ export function ImageSessionCard({ session, selected, onSelect }: ImageSessionCa
             <span className="text-xs text-[var(--foreground-subtle)]">Original</span>
 
             <span className="text-xs text-[var(--foreground-muted)]">
-              {session.assets.length} {session.assets.length === 1 ? "version" : "versions"}
+              {visibleVersionCount} {visibleVersionCount === 1 ? "version" : "versions"}
             </span>
           </div>
         </div>

@@ -1,4 +1,4 @@
-export type AssetType = "ORIGINAL" | "GENERATED";
+export type AssetType = "ORIGINAL" | "GENERATED" | "FLOW_INPUT";
 
 export type Asset = {
   id: string;

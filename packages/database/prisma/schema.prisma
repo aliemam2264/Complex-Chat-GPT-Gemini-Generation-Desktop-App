@@ -10,6 +10,7 @@ datasource db {
 enum AssetType {
   ORIGINAL
   GENERATED
+  FLOW_INPUT
 }
 
 enum PreserveMode {
