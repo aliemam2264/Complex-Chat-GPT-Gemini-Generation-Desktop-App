@@ -2,7 +2,7 @@ import { spawn, type ChildProcess } from "node:child_process";
 import { createWriteStream, type WriteStream } from "node:fs";
 import { mkdir, writeFile } from "node:fs/promises";
 import { createServer } from "node:net";
-import { join } from "node:path";
+import { extname, join } from "node:path";
 
 import {
   app,
@@ -56,6 +56,40 @@ async function downloadImageBuffer(imageUrl: string) {
   return Buffer.from(await response.arrayBuffer());
 }
 
+function sanitizeImageFileName(fileName: string) {
+  const fallback = "eskander-render.png";
+  const trimmed = fileName?.trim() || fallback;
+  const cleaned = trimmed.replace(/[<>:"/\|?*]+/g, "-").replace(/\s+/g, " ").trim();
+  const base = cleaned || fallback;
+  const extension = extname(base);
+
+  return extension ? base : `${base}.png`;
+}
+
+async function stageDragImageFile(imageUrl: string, fileName: string) {
+  const buffer = await downloadImageBuffer(imageUrl);
+  const dragDir = join(app.getPath("temp"), "eskander-studio-drags");
+  await mkdir(dragDir, { recursive: true });
+
+  const safeName = sanitizeImageFileName(fileName);
+  const token = `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+  const dragPath = join(dragDir, `${token}-${safeName}`);
+  const iconPath = join(dragDir, `${token}-drag-icon.png`);
+
+  await writeFile(dragPath, buffer);
+
+  const preview = nativeImage.createFromBuffer(buffer);
+  if (!preview.isEmpty()) {
+    const thumbnail = preview.resize({ width: 96, height: 96, quality: "good" });
+    await writeFile(iconPath, thumbnail.toPNG());
+  }
+
+  return {
+    dragPath,
+    iconPath: preview.isEmpty() ? null : iconPath,
+  };
+}
+
 ipcMain.handle(
   "image:save",
   async (_event, imageUrl: string, fileName: string) => {
@@ -100,6 +134,48 @@ ipcMain.handle("image:copy", async (_event, imageUrl: string) => {
   return {
     success: true,
   };
+});
+
+
+ipcMain.handle("image:prepare-drag", async (_event, imageUrl: string, fileName: string) => {
+  const prepared = await stageDragImageFile(imageUrl, fileName);
+
+  return {
+    success: true,
+    filePath: prepared.dragPath,
+    iconPath: prepared.iconPath,
+  };
+});
+
+ipcMain.on("image:start-drag", (event, filePath: string, iconPath?: string | null) => {
+  try {
+    if (!filePath) return;
+
+    let icon = iconPath ? nativeImage.createFromPath(iconPath) : nativeImage.createEmpty();
+
+    if (icon.isEmpty()) {
+      icon = nativeImage.createFromPath(filePath);
+    }
+
+    if (icon.isEmpty()) {
+      const appIcon = nativeImage.createFromPath(getAppIconPath());
+      if (!appIcon.isEmpty()) icon = appIcon;
+    }
+
+    if (icon.isEmpty()) {
+      icon = nativeImage.createFromDataURL(
+        "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAusB9Wl2ZQAAAABJRU5ErkJggg==",
+      );
+    }
+
+    event.sender.startDrag({
+      file: filePath,
+      icon,
+    });
+  } catch (error) {
+    // Native drag must never be allowed to crash or terminate the app.
+    console.error("Image drag failed:", error);
+  }
 });
 
 async function getFreePort() {

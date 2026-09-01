@@ -105,9 +105,14 @@ export default function RenderWorkspacePage() {
     }
   }, [original, selectedSourceId]);
 
-  const selectedSource = session?.assets.find((asset) => asset.id === selectedSourceId);
-
   const generatedAssets = useMemo(() => session?.assets.filter((asset) => asset.type === "GENERATED") ?? [], [session]);
+
+  const versionAssets = useMemo(
+    () => session?.assets.filter((asset) => asset.type === "ORIGINAL" || asset.type === "GENERATED") ?? [],
+    [session],
+  );
+
+  const selectedSource = versionAssets.find((asset) => asset.id === selectedSourceId) ?? null;
 
   const selectedVersionAssets = useMemo(
     () => generatedAssets.filter((asset) => selectedVersionIds.includes(asset.id)),
@@ -129,6 +134,16 @@ export default function RenderWorkspacePage() {
       return next.length === current.length ? current : next;
     });
   }, [session]);
+
+  useEffect(() => {
+    if (!selectedSourceId || !versionAssets.length) {
+      return;
+    }
+
+    if (!versionAssets.some((asset) => asset.id === selectedSourceId)) {
+      setSelectedSourceId(original?.id ?? versionAssets[0]?.id ?? null);
+    }
+  }, [original?.id, selectedSourceId, versionAssets]);
 
   /*
    * Poll active generation while ChatGPT is working.
@@ -206,7 +221,7 @@ export default function RenderWorkspacePage() {
       return "Original";
     }
 
-    const generated = session?.assets.filter((item) => item.type === "GENERATED") ?? [];
+    const generated = generatedAssets;
 
     const index = generated.findIndex((item) => item.id === asset.id);
 
@@ -457,14 +472,14 @@ export default function RenderWorkspacePage() {
     let fallbackSourceId: string | null = selectedSourceId;
 
     if (selectedSourceId && idsToDeleteSet.has(selectedSourceId)) {
-      const selectedIndex = session.assets.findIndex((asset) => asset.id === selectedSourceId);
+      const selectedIndex = versionAssets.findIndex((asset) => asset.id === selectedSourceId);
 
-      const previousAsset = session.assets
+      const previousAsset = versionAssets
         .slice(0, Math.max(0, selectedIndex))
         .reverse()
         .find((asset) => !idsToDeleteSet.has(asset.id));
 
-      const nextAsset = session.assets.slice(selectedIndex + 1).find((asset) => !idsToDeleteSet.has(asset.id));
+      const nextAsset = versionAssets.slice(selectedIndex + 1).find((asset) => !idsToDeleteSet.has(asset.id));
 
       fallbackSourceId = previousAsset?.id ?? nextAsset?.id ?? original?.id ?? null;
     }
@@ -542,7 +557,7 @@ export default function RenderWorkspacePage() {
             </div>
 
             <div className="text-xs text-[var(--foreground-muted)]">
-              {session.assets.length} {session.assets.length === 1 ? "version" : "versions"}
+              {versionAssets.length} {versionAssets.length === 1 ? "version" : "versions"}
             </div>
           </header>
 
@@ -673,7 +688,7 @@ export default function RenderWorkspacePage() {
 
                   {versionView === "STRIP" ? (
                     <div className="flex gap-3 overflow-x-auto pb-2">
-                      {session.assets.map((asset) => {
+                      {versionAssets.map((asset) => {
                         const active = asset.id === selectedSourceId;
                         const selectedForDelete = selectedVersionIds.includes(asset.id);
 
@@ -729,7 +744,7 @@ export default function RenderWorkspacePage() {
                     </div>
                   ) : (
                     <VersionTreePanel
-                      assets={session.assets}
+                      assets={versionAssets}
                       selectedSourceId={selectedSourceId}
                       selectedVersionIds={selectedVersionIds}
                       onSelectSource={setSelectedSourceId}

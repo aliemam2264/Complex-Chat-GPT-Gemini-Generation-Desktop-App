@@ -19,6 +19,17 @@ declare global {
       copyImage: (imageUrl: string) => Promise<{
         success: boolean;
       }>;
+
+      prepareImageDrag: (
+        imageUrl: string,
+        fileName: string,
+      ) => Promise<{
+        success: boolean;
+        filePath: string;
+        iconPath?: string | null;
+      }>;
+
+      startImageDrag: (filePath: string, iconPath?: string | null) => void;
     };
   }
 }

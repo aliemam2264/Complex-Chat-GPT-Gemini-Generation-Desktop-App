@@ -6,6 +6,7 @@ import {
   useMemo,
   useRef,
   useState,
+  type DragEvent as ReactDragEvent,
   type MouseEvent as ReactMouseEvent,
   type PointerEvent as ReactPointerEvent,
   type ReactNode,
@@ -18,8 +19,10 @@ import {
   ArrowLeft,
   Bot,
   Check,
+  ChevronDown,
   CirclePlay,
   Copy,
+  Download,
   FileImage,
   GripVertical,
   Hand,
@@ -529,7 +532,7 @@ function makeInitialNodes(data: FlowData): CanvasNode[] {
         promptNodeId: assistantId,
         sourceNodeId: sourceId,
         referenceNodeIds: [],
-        preserveMode: "BALANCED",
+        preserveMode: "STRICT",
         preserveEverythingElse: true,
         status: "DRAFT",
         progressMessage: null,
@@ -571,6 +574,10 @@ export function RenderFlowEditor({ projectId, sessionId }: RenderFlowEditorProps
   const initializedRef = useRef(false);
   const referenceDropPointRef = useRef({ x: 360, y: 720 });
   const referenceTargetGeneratorRef = useRef<string | null>(null);
+  const preparedImageDragsRef = useRef(
+    new Map<string, { filePath: string; iconPath?: string | null }>(),
+  );
+  const preparingImageDragsRef = useRef(new Set<string>());
 
   const [nodes, setNodes] = useState<CanvasNode[]>([]);
   const [selectedNodeIds, setSelectedNodeIds] = useState<string[]>([]);
@@ -916,6 +923,20 @@ export function RenderFlowEditor({ projectId, sessionId }: RenderFlowEditorProps
     return () => window.clearTimeout(timer);
   }, [toast]);
 
+  useEffect(() => {
+    if (!window.eskanderStudio?.desktop) return;
+
+    for (const node of nodes) {
+      if (node.kind !== "IMAGE_GENERATOR") continue;
+      const asset = (node.data as GeneratorNodeData).outputAsset;
+      if (!asset) continue;
+      if (preparedImageDragsRef.current.has(asset.id)) continue;
+      if (preparingImageDragsRef.current.has(asset.id)) continue;
+
+      void prepareGeneratorImageDrag(asset);
+    }
+  }, [nodes]);
+
   const edges = useMemo(() => {
     const result: Array<{
       id: string;
@@ -984,7 +1005,7 @@ export function RenderFlowEditor({ projectId, sessionId }: RenderFlowEditorProps
   function startNodeDrag(event: ReactPointerEvent, node: CanvasNode) {
     if (event.button !== 0 || tool === "PAN" || spaceHeld) return;
     const target = event.target as HTMLElement;
-    if (target.closest("button, textarea, input, select")) return;
+    if (target.closest("button, textarea, input, select, [data-native-image-drag]")) return;
 
     event.preventDefault();
     event.stopPropagation();
@@ -1281,7 +1302,7 @@ export function RenderFlowEditor({ projectId, sessionId }: RenderFlowEditorProps
           promptNodeId,
           sourceNodeId,
           referenceNodeIds: [],
-          preserveMode: "BALANCED",
+          preserveMode: "STRICT",
           preserveEverythingElse: true,
           status: "DRAFT",
           progressMessage: null,
@@ -1300,6 +1321,15 @@ export function RenderFlowEditor({ projectId, sessionId }: RenderFlowEditorProps
       .find((node) => node.kind === "IMAGE_GENERATOR" && Boolean((node.data as GeneratorNodeData).outputAsset));
     const sourceImage = latestGenerator ?? nodes.find((node) => node.kind === "IMAGE" && Boolean((node.data as ImageNodeData).asset));
 
+    const rightMostEdge = nodes.length > 0
+      ? Math.max(...nodes.map((node) => node.x + node.width))
+      : x;
+    const topMostNode = nodes.length > 0
+      ? Math.min(...nodes.map((node) => node.y))
+      : y;
+    const pipelineX = Math.max(x, rightMostEdge + 180);
+    const pipelineY = Math.max(120, Math.min(y, topMostNode + 80));
+
     const textId = `draft-text-${crypto.randomUUID()}`;
     const assistantId = `draft-assistant-${crypto.randomUUID()}`;
     const generatorId = `draft-generator-${crypto.randomUUID()}`;
@@ -1310,8 +1340,8 @@ export function RenderFlowEditor({ projectId, sessionId }: RenderFlowEditorProps
       {
         id: textId,
         kind: "TEXT",
-        x,
-        y,
+        x: pipelineX,
+        y: pipelineY,
         width: TEXT_SIZE.width,
         height: TEXT_SIZE.height,
         data: { title: `Text #${number}`, text: "" } satisfies TextNodeData,
@@ -1319,8 +1349,8 @@ export function RenderFlowEditor({ projectId, sessionId }: RenderFlowEditorProps
       {
         id: assistantId,
         kind: "ASSISTANT",
-        x: x + 510,
-        y: y - 10,
+        x: pipelineX + 510,
+        y: pipelineY - 10,
         width: ASSISTANT_SIZE.width,
         height: ASSISTANT_SIZE.height,
         data: {
@@ -1335,8 +1365,8 @@ export function RenderFlowEditor({ projectId, sessionId }: RenderFlowEditorProps
       {
         id: generatorId,
         kind: "IMAGE_GENERATOR",
-        x: x + 975,
-        y: y - 20,
+        x: pipelineX + 975,
+        y: pipelineY - 20,
         width: GENERATOR_SIZE.width,
         height: GENERATOR_SIZE.height,
         data: {
@@ -1344,7 +1374,7 @@ export function RenderFlowEditor({ projectId, sessionId }: RenderFlowEditorProps
           promptNodeId: assistantId,
           sourceNodeId: sourceImage?.id ?? null,
           referenceNodeIds: [],
-          preserveMode: "BALANCED",
+          preserveMode: "STRICT",
           preserveEverythingElse: true,
           status: "DRAFT",
           progressMessage: null,
@@ -1589,7 +1619,7 @@ export function RenderFlowEditor({ projectId, sessionId }: RenderFlowEditorProps
         sessionId,
         sourceAssetId: sourceAsset.id,
         instruction,
-        preserveMode: generatorData?.preserveMode ?? "BALANCED",
+        preserveMode: generatorData?.preserveMode ?? "STRICT",
         preserveEverythingElse: generatorData?.preserveEverythingElse ?? true,
         includeReferencesInAssistant: assistant.includeReferences,
         ...references,
@@ -1831,6 +1861,108 @@ export function RenderFlowEditor({ projectId, sessionId }: RenderFlowEditorProps
     removeNodes([node.id]);
   }
 
+  function nodeHasConnections(nodeId: string) {
+    const ownNode = nodeById.get(nodeId);
+    if (!ownNode) return false;
+
+    if (ownNode.kind === "ASSISTANT" && Boolean((ownNode.data as AssistantNodeData).textNodeId)) {
+      return true;
+    }
+
+    if (ownNode.kind === "IMAGE_GENERATOR") {
+      const generator = ownNode.data as GeneratorNodeData;
+      if (generator.promptNodeId || generator.sourceNodeId || generator.referenceNodeIds.length > 0) {
+        return true;
+      }
+    }
+
+    for (const candidate of nodes) {
+      if (candidate.kind === "ASSISTANT") {
+        if ((candidate.data as AssistantNodeData).textNodeId === nodeId) return true;
+      }
+
+      if (candidate.kind === "IMAGE_GENERATOR") {
+        const generator = candidate.data as GeneratorNodeData;
+        if (
+          generator.promptNodeId === nodeId ||
+          generator.sourceNodeId === nodeId ||
+          generator.referenceNodeIds.includes(nodeId)
+        ) {
+          return true;
+        }
+      }
+    }
+
+    return false;
+  }
+
+  function unlinkNodeConnections(targetNodeIds: string[]) {
+    const ids = new Set(targetNodeIds);
+    if (ids.size === 0) return;
+
+    setNodes((current) =>
+      current.map((node) => {
+        if (node.kind === "ASSISTANT") {
+          const data = node.data as AssistantNodeData;
+          const clearOwnInput = ids.has(node.id);
+          const clearLinkedInput = data.textNodeId ? ids.has(data.textNodeId) : false;
+
+          if (!clearOwnInput && !clearLinkedInput) return node;
+
+          return {
+            ...node,
+            data: {
+              ...data,
+              textNodeId: null,
+              state: data.outputText.trim() ? "READY" : "IDLE",
+              errorMessage: null,
+            },
+          };
+        }
+
+        if (node.kind === "IMAGE_GENERATOR") {
+          const data = node.data as GeneratorNodeData;
+          const clearOwnInputs = ids.has(node.id);
+          const nextPromptNodeId =
+            clearOwnInputs || (data.promptNodeId ? ids.has(data.promptNodeId) : false)
+              ? null
+              : data.promptNodeId;
+          const nextSourceNodeId =
+            clearOwnInputs || (data.sourceNodeId ? ids.has(data.sourceNodeId) : false)
+              ? null
+              : data.sourceNodeId;
+          const nextReferenceNodeIds = clearOwnInputs
+            ? []
+            : data.referenceNodeIds.filter((referenceNodeId) => !ids.has(referenceNodeId));
+
+          if (
+            nextPromptNodeId === data.promptNodeId &&
+            nextSourceNodeId === data.sourceNodeId &&
+            nextReferenceNodeIds.length === data.referenceNodeIds.length
+          ) {
+            return node;
+          }
+
+          return {
+            ...node,
+            data: {
+              ...data,
+              promptNodeId: nextPromptNodeId,
+              sourceNodeId: nextSourceNodeId,
+              referenceNodeIds: nextReferenceNodeIds,
+              errorMessage: null,
+            },
+          };
+        }
+
+        return node;
+      }),
+    );
+
+    setPendingConnection(null);
+    setToast(ids.size === 1 ? "Connection removed" : "Connections removed");
+  }
+
   function renderActionBar(node: CanvasNode) {
     if (selectedNodeId !== node.id) return null;
 
@@ -1844,6 +1976,9 @@ export function RenderFlowEditor({ projectId, sessionId }: RenderFlowEditorProps
         node.kind === "ASSISTANT" ||
         node.kind === "IMAGE" ||
         (node.kind === "IMAGE_GENERATOR" && Boolean((node.data as GeneratorNodeData).outputAsset)));
+    const canUnlink = multipleSelected
+      ? selectedNodeIds.some((nodeId) => nodeHasConnections(nodeId))
+      : nodeHasConnections(node.id);
 
     return (
       <div
@@ -1880,6 +2015,20 @@ export function RenderFlowEditor({ projectId, sessionId }: RenderFlowEditorProps
             title="Connect output"
           >
             <Link2 size={16} />
+          </button>
+        )}
+
+        {canUnlink && (
+          <button
+            type="button"
+            onClick={(event) => {
+              event.stopPropagation();
+              unlinkNodeConnections(multipleSelected ? selectedNodeIds : [node.id]);
+            }}
+            className="flex h-9 w-10 items-center justify-center rounded-lg text-white/75 hover:bg-white/[0.08] hover:text-white"
+            title={multipleSelected ? "Unlink selected nodes" : "Unlink node"}
+          >
+            <X size={15} />
           </button>
         )}
 
@@ -2192,6 +2341,91 @@ export function RenderFlowEditor({ projectId, sessionId }: RenderFlowEditorProps
     );
   }
 
+  async function saveGeneratorImage(asset: Asset) {
+    try {
+      if (!window.eskanderStudio?.desktop) {
+        throw new Error("Eskander Studio desktop bridge is not available.");
+      }
+
+      const result = await window.eskanderStudio.saveImage(
+        getAssetUrl(asset.filePath),
+        asset.fileName || "eskander-render.png",
+      );
+
+      if (!result.canceled && result.success) {
+        setToast("Image saved");
+      }
+    } catch (error) {
+      console.error("Save image failed:", error);
+      setError(error instanceof Error ? error.message : "Could not save image.");
+    }
+  }
+
+  async function copyGeneratorImage(asset: Asset) {
+    try {
+      if (!window.eskanderStudio?.desktop) {
+        throw new Error("Eskander Studio desktop bridge is not available.");
+      }
+
+      await window.eskanderStudio.copyImage(getAssetUrl(asset.filePath));
+      setToast("Copied to clipboard");
+    } catch (error) {
+      console.error("Copy image failed:", error);
+      setError(error instanceof Error ? error.message : "Could not copy image.");
+    }
+  }
+
+  async function prepareGeneratorImageDrag(asset: Asset) {
+    const cached = preparedImageDragsRef.current.get(asset.id);
+    if (cached) return cached;
+
+    if (!window.eskanderStudio?.desktop) return null;
+    if (preparingImageDragsRef.current.has(asset.id)) return null;
+
+    preparingImageDragsRef.current.add(asset.id);
+
+    try {
+      const result = await window.eskanderStudio.prepareImageDrag(
+        getAssetUrl(asset.filePath),
+        asset.fileName || "eskander-render.png",
+      );
+
+      if (!result.success || !result.filePath) return null;
+
+      const prepared = {
+        filePath: result.filePath,
+        iconPath: result.iconPath ?? null,
+      };
+      preparedImageDragsRef.current.set(asset.id, prepared);
+      return prepared;
+    } catch (error) {
+      console.error("Prepare image drag failed:", error);
+      return null;
+    } finally {
+      preparingImageDragsRef.current.delete(asset.id);
+    }
+  }
+
+  function startGeneratorImageDrag(event: ReactDragEvent<HTMLImageElement>, asset: Asset) {
+    // Electron's native file drag replaces Chromium's normal image drag.
+    event.preventDefault();
+    event.stopPropagation();
+
+    if (!window.eskanderStudio?.desktop) {
+      setError("Eskander Studio desktop bridge is not available.");
+      return;
+    }
+
+    const prepared = preparedImageDragsRef.current.get(asset.id);
+    if (!prepared) {
+      void prepareGeneratorImageDrag(asset);
+      setToast("Preparing image for drag — grab it again in a moment");
+      return;
+    }
+
+    window.eskanderStudio.startImageDrag(prepared.filePath, prepared.iconPath ?? null);
+  }
+
   function renderGeneratorNode(node: CanvasNode) {
     const data = node.data as GeneratorNodeData;
     const active = ACTIVE_STATUSES.has(data.status);
@@ -2206,7 +2440,50 @@ export function RenderFlowEditor({ projectId, sessionId }: RenderFlowEditorProps
       <>
         <div className="absolute inset-x-0 top-0 h-[284px] overflow-hidden rounded-t-[13px] bg-[#151517]">
           {completed ? (
-            <img src={getAssetUrl(data.outputAsset!.filePath)} alt="Generated result" className="h-full w-full object-contain" />
+            <div className="relative h-full w-full">
+              <img
+                data-native-image-drag
+                draggable
+                src={getAssetUrl(data.outputAsset!.filePath)}
+                alt="Generated result"
+                title="Drag the image itself into Photoshop or another app"
+                onPointerDown={(event) => event.stopPropagation()}
+                onPointerEnter={() => {
+                  void prepareGeneratorImageDrag(data.outputAsset!);
+                }}
+                onDragStart={(event) => startGeneratorImageDrag(event, data.outputAsset!)}
+                className="h-full w-full cursor-grab select-none object-contain active:cursor-grabbing"
+              />
+              <div className="pointer-events-none absolute left-3 top-3 rounded-lg border border-white/[0.1] bg-black/70 px-2.5 py-1 text-[12px] font-medium text-white/82 backdrop-blur">
+                Ready · drag image
+              </div>
+              <div className="absolute right-3 top-3 z-10 flex items-center gap-1 rounded-xl border border-white/[0.08] bg-black/70 p-1 shadow-lg backdrop-blur">
+                <button
+                  type="button"
+                  onPointerDown={(event) => event.stopPropagation()}
+                  onClick={(event) => {
+                    event.stopPropagation();
+                    void saveGeneratorImage(data.outputAsset!);
+                  }}
+                  className="flex h-8 w-8 items-center justify-center rounded-lg text-white/78 transition hover:bg-white/[0.08] hover:text-white"
+                  title="Save image"
+                >
+                  <Download size={14} />
+                </button>
+                <button
+                  type="button"
+                  onPointerDown={(event) => event.stopPropagation()}
+                  onClick={(event) => {
+                    event.stopPropagation();
+                    void copyGeneratorImage(data.outputAsset!);
+                  }}
+                  className="flex h-8 w-8 items-center justify-center rounded-lg text-white/78 transition hover:bg-white/[0.08] hover:text-white"
+                  title="Copy image"
+                >
+                  <Copy size={14} />
+                </button>
+              </div>
+            </div>
           ) : active ? (
             <div className="relative flex h-full flex-col items-center justify-center overflow-hidden text-white/48">
               <div className="absolute inset-0 bg-[radial-gradient(circle_at_50%_90%,rgba(97,227,160,0.08),transparent_45%)]" />
@@ -2241,24 +2518,27 @@ export function RenderFlowEditor({ projectId, sessionId }: RenderFlowEditorProps
 
         <div className="absolute bottom-0 left-0 right-0 flex h-[60px] items-center justify-between border-t border-white/[0.05] px-4">
           <div className="flex min-w-0 items-center gap-2">
-            <select
-              value={data.preserveMode}
-              onChange={(event) =>
-                updateNode<GeneratorNodeData>(node.id, (current) => ({
-                  ...current,
-                  preserveMode: event.target.value as PreserveMode,
-                  preserveEverythingElse: event.target.value === "NO_RESTRICTION" ? false : current.preserveEverythingElse,
-                }))
-              }
-              onPointerDown={(event) => event.stopPropagation()}
-              className="h-9 rounded-lg border-0 bg-white/[0.05] px-3 text-[13px] text-white/76 outline-none"
-              title="How strongly the prompt should preserve the original image"
-            >
-              <option value="STRICT">Strict</option>
-              <option value="BALANCED">Balanced</option>
-              <option value="CREATIVE">Creative</option>
-              <option value="NO_RESTRICTION">Free</option>
-            </select>
+            <div className="relative shrink-0">
+              <select
+                value={data.preserveMode}
+                onChange={(event) =>
+                  updateNode<GeneratorNodeData>(node.id, (current) => ({
+                    ...current,
+                    preserveMode: event.target.value as PreserveMode,
+                    preserveEverythingElse: event.target.value === "NO_RESTRICTION" ? false : current.preserveEverythingElse,
+                  }))
+                }
+                onPointerDown={(event) => event.stopPropagation()}
+                className="h-9 appearance-none rounded-lg border border-white/[0.1] bg-[#202024] pl-3 pr-8 text-[13px] font-medium text-white/88 shadow-[inset_0_1px_0_rgba(255,255,255,0.04)] outline-none transition hover:bg-[#25252a] focus:border-[#7c68ff]/55 focus:bg-[#25252a]"
+                title="How strongly the prompt should preserve the original image"
+              >
+                <option value="STRICT">Strict</option>
+                <option value="BALANCED">Balanced</option>
+                <option value="CREATIVE">Creative</option>
+                <option value="NO_RESTRICTION">Free</option>
+              </select>
+              <ChevronDown size={14} className="pointer-events-none absolute right-2 top-1/2 -translate-y-1/2 text-white/45" />
+            </div>
 
             <button
               type="button"
@@ -2270,7 +2550,7 @@ export function RenderFlowEditor({ projectId, sessionId }: RenderFlowEditorProps
                   preserveEverythingElse: !current.preserveEverythingElse,
                 }));
               }}
-              className="flex h-9 items-center gap-2 rounded-lg bg-white/[0.05] px-3 text-[13px] text-white/64"
+              className="flex h-9 items-center gap-2 rounded-lg border border-white/[0.08] bg-[#202024] px-3 text-[13px] text-white/72 transition hover:bg-[#25252a]"
               title="Preserve everything not explicitly requested to change"
             >
               <span
@@ -2296,7 +2576,7 @@ export function RenderFlowEditor({ projectId, sessionId }: RenderFlowEditorProps
                 event.stopPropagation();
                 openReferencePicker(node.id);
               }}
-              className="flex h-9 items-center gap-2 rounded-lg bg-white/[0.05] px-3 text-[13px] text-white/64 hover:bg-white/[0.08] disabled:opacity-30"
+              className="flex h-9 items-center gap-2 rounded-lg border border-white/[0.08] bg-[#202024] px-3 text-[13px] text-white/72 transition hover:bg-[#25252a] disabled:opacity-30"
               title="Upload a visual reference for Gemini"
             >
               <ImagePlus size={14} /> Refs {referenceCount}/5

@@ -18,4 +18,10 @@ contextBridge.exposeInMainWorld("eskanderStudio", {
 
   copyImage: (imageUrl: string) =>
     ipcRenderer.invoke("image:copy", imageUrl),
+
+  prepareImageDrag: (imageUrl: string, fileName: string) =>
+    ipcRenderer.invoke("image:prepare-drag", imageUrl, fileName),
+
+  startImageDrag: (filePath: string, iconPath?: string | null) =>
+    ipcRenderer.send("image:start-drag", filePath, iconPath),
 });

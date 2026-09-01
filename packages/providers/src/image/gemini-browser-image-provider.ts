@@ -1440,35 +1440,99 @@ export class GeminiBrowserImageProvider implements ImageProvider {
 
   private async findVisibleSendControl(page: Page): Promise<Locator | null> {
     /*
-     * Keep this intentionally simple. Current working Gemini automations use
-     * .send-button / button[aria-label="Send message"] rather than requiring
-     * a particular aria-disabled/class state on the custom host.
+     * Gemini reuses the same custom send-button host for Send and Stop/Cancel.
+     * Never click a control just because it has `.send-button`: inspect the
+     * current label/icon and reject anything that already represents Stop.
      */
     const selectors = [
-      "gem-icon-button.send-button",
-      ".send-button",
-      "button.send-button",
+      '[data-test-id="send-button"]',
+      '[data-test-id="send-button-container"] button',
+      '[data-test-id="send-button-container"] gem-icon-button',
       'button[aria-label="Send message"]',
       'button[aria-label*="Send" i]',
       'gem-icon-button[arialabel="Send message"]',
       'gem-icon-button[aria-label="Send message"]',
       'gem-icon-button[arialabel="Send"]',
       'gem-icon-button[aria-label="Send"]',
-      '[data-test-id="send-button"]',
-      '[data-test-id="send-button-container"] .send-button',
-      '[data-test-id="send-button-container"] gem-icon-button',
       'button[aria-label="إرسال الرسالة"]',
       'button[aria-label="إرسال"]',
+      'gem-icon-button.send-button',
+      'button.send-button',
+      '.send-button',
     ];
 
     for (const selector of selectors) {
       const locator = page.locator(selector);
       const count = await locator.count().catch(() => 0);
 
-      for (let index = 0; index < count; index += 1) {
+      for (let index = count - 1; index >= 0; index -= 1) {
         const candidate = locator.nth(index);
 
-        if (await candidate.isVisible().catch(() => false)) {
+        if (!(await candidate.isVisible().catch(() => false))) {
+          continue;
+        }
+
+        const metadata = await candidate
+          .evaluate((element) => {
+            const host = element as HTMLElement;
+            const nestedButton = host.querySelector("button") as HTMLButtonElement | null;
+            const control = nestedButton ?? host;
+            const icons = Array.from(host.querySelectorAll("mat-icon"))
+              .map((icon) =>
+                [
+                  icon.getAttribute("data-mat-icon-name"),
+                  icon.getAttribute("fonticon"),
+                  icon.textContent,
+                ]
+                  .filter(Boolean)
+                  .join(" "),
+              )
+              .join(" ");
+
+            return {
+              ariaLabel:
+                control.getAttribute("aria-label") ??
+                host.getAttribute("aria-label") ??
+                host.getAttribute("arialabel") ??
+                "",
+              text: host.innerText ?? host.textContent ?? "",
+              icons,
+              className: host.className || "",
+              ariaDisabled:
+                control.getAttribute("aria-disabled") ??
+                host.getAttribute("aria-disabled") ??
+                "",
+              disabled:
+                (control instanceof HTMLButtonElement && control.disabled) ||
+                control.hasAttribute("disabled") ||
+                host.hasAttribute("disabled"),
+            };
+          })
+          .catch(() => null);
+
+        if (!metadata || metadata.disabled || metadata.ariaDisabled === "true") {
+          continue;
+        }
+
+        const signature = `${metadata.ariaLabel} ${metadata.text} ${metadata.icons} ${metadata.className}`
+          .replace(/\s+/g, " ")
+          .trim()
+          .toLowerCase();
+
+        if (/stop|cancel|stop_circle|إيقاف|الغاء|إلغاء/.test(signature)) {
+          console.log(`[Gemini] Ignoring non-send composer control: ${signature.slice(0, 140)}`);
+          continue;
+        }
+
+        const explicitSendSignature = `${metadata.ariaLabel} ${metadata.text} ${metadata.icons}`
+          .replace(/\s+/g, " ")
+          .trim()
+          .toLowerCase();
+
+        if (
+          /send|send_message|arrow_upward|إرسال/.test(explicitSendSignature) ||
+          selector === '[data-test-id="send-button"]'
+        ) {
           return candidate;
         }
       }
@@ -1590,25 +1654,37 @@ ${prompt}
           `[Gemini] Prompt entered (${enteredText.length} chars). Submission attempt ${attempt}/3.`,
         );
 
-        submissionArmed = true;
+        networkSubmitted = false;
+        submissionArmed = false;
 
-        const sendControl = await this.findVisibleSendControl(page);
+        const sendDeadline = Date.now() + 8_000;
+        let sendControl: Locator | null = null;
+
+        while (Date.now() < sendDeadline && !sendControl) {
+          sendControl = await this.findVisibleSendControl(page);
+
+          if (!sendControl) {
+            await page.waitForTimeout(250);
+          }
+        }
+
         let clickedSend = false;
+        submissionArmed = true;
 
         if (sendControl) {
           try {
-            console.log("[Gemini] Clicking visible send control.");
+            console.log("[Gemini] Clicking verified Send control.");
             await sendControl.click({ timeout: 5_000 });
             clickedSend = true;
           } catch (error) {
-            console.warn("[Gemini] Visible send control click failed; using Enter fallback:", error);
+            console.warn("[Gemini] Verified Send control click failed; using composer Enter fallback:", error);
           }
         }
 
         if (!clickedSend) {
-          console.log("[Gemini] Sending with Enter fallback.");
+          console.log("[Gemini] No safe Send control was available. Sending with composer Enter fallback.");
           await composer.click({ force: true }).catch(() => undefined);
-          await page.keyboard.press("Enter");
+          await composer.press("Enter");
         }
 
         const submitted = await this.waitForPromptSubmissionEvidence(
@@ -1618,7 +1694,7 @@ ${prompt}
             ...baseline,
             networkSubmitted: () => networkSubmitted,
           },
-          12_000,
+          20_000,
         );
 
         if (submitted) {

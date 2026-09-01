@@ -839,6 +839,7 @@ ${unrestricted ? "- avoid adding preservation requirements the user did not ask 
     initialAssistantCount: number,
     initialAssistantText: string,
     initialTurnCount: number,
+    timeoutMs = 90_000,
   ): Promise<string> {
     console.log("[ChatGPT] Waiting for prompt result...");
 
@@ -859,7 +860,7 @@ ${unrestricted ? "- avoid adding preservation requirements the user did not ask 
     const conversationTurns = page.locator('article[data-testid^="conversation-turn-"]');
     const fallbackConversationTurns = page.locator('[data-testid^="conversation-turn-"]');
 
-    const deadline = Date.now() + 60_000;
+    const deadline = Date.now() + timeoutMs;
     let previousCandidate = "";
     let stableIterations = 0;
     let lastProgressLogAt = 0;
@@ -982,7 +983,9 @@ ${unrestricted ? "- avoid adding preservation requirements the user did not ask 
     }
 
     await this.dumpDebugInfo(page).catch(() => undefined);
-    throw new Error("ChatGPT prompt generation timed out after 60 seconds.");
+    throw new Error(
+      `ChatGPT prompt generation timed out after ${Math.round(timeoutMs / 1000)} seconds.`,
+    );
   }
 
   private cleanResponse(text: string): string {
@@ -1099,11 +1102,14 @@ ${unrestricted ? "- avoid adding preservation requirements the user did not ask 
         message: "ChatGPT is analyzing the render and building the prompt...",
       });
 
+      const responseTimeoutMs = referenceImages.length > 0 ? 150_000 : 90_000;
+
       const response = await this.waitForAssistantResponse(
         page,
         initialAssistantCount,
         initialAssistantText,
         initialTurnCount,
+        responseTimeoutMs,
       );
       const cleaned = this.cleanResponse(response);
 
