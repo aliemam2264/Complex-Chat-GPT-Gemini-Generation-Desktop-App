@@ -2341,13 +2341,54 @@ ${prompt}
         const downloadButton = await this.findLastVisibleDownloadButton(page);
 
         if (downloadButton) {
-          const snapshot = generatedCandidate
-            ? await this.captureGeneratedImageSnapshot(page, generatedCandidate)
+          /*
+           * Gemini can expose the Download control a fraction of a second
+           * before our normal image scan records the generated <img>. If we
+           * return on the button alone and Chromium does not emit a Playwright
+           * download event, there is no image/snapshot left to fall back to.
+           *
+           * Re-scan immediately and also accept the already-qualified network
+           * candidate. The visible Download button is strong evidence that the
+           * generation is complete, so there is no need to wait for the normal
+           * stability grace period here.
+           */
+          const buttonCandidate =
+            generatedCandidate ??
+            (await this.findNewGeneratedImage(
+              page,
+              initialImageSignatures,
+              true,
+            ));
+
+          if (buttonCandidate) {
+            generatedCandidate = buttonCandidate;
+          }
+
+          let snapshot = buttonCandidate
+            ? await this.captureGeneratedImageSnapshot(page, buttonCandidate)
             : null;
+
+          if (!snapshot) {
+            const latestNetworkCandidate = networkCapture?.getBest() ?? null;
+
+            if (latestNetworkCandidate) {
+              snapshot = {
+                buffer: latestNetworkCandidate.buffer,
+                mimeType: latestNetworkCandidate.mimeType,
+                extension: latestNetworkCandidate.extension,
+                width: latestNetworkCandidate.width,
+                height: latestNetworkCandidate.height,
+              };
+
+              console.log(
+                "[Gemini] Download button appeared before DOM capture; keeping network bytes as download fallback.",
+              );
+            }
+          }
 
           return {
             downloadButton,
-            image: generatedCandidate?.image ?? null,
+            image: buttonCandidate?.image ?? null,
             snapshot,
             detectedBy: "download-button",
           };
@@ -2854,6 +2895,60 @@ ${input.prompt}`
             "[Gemini] Download control did not produce a file. Trying generated-image fallback:",
             error,
           );
+
+          /*
+           * Current Gemini builds do not always surface a browser download
+           * event for the full-size control. The click can still finish the
+           * media request (or leave the final <img> in the DOM). Give that
+           * state a short moment to settle, then recover from network/DOM
+           * bytes instead of failing the whole generation.
+           */
+          await page.waitForTimeout(1_500).catch(() => undefined);
+
+          const postClickNetworkCandidate = networkCapture?.getBest() ?? null;
+
+          if (postClickNetworkCandidate) {
+            console.log(
+              "[Gemini] Recovering generated image from network bytes after download-event failure.",
+            );
+
+            return this.saveGeneratedImageFallback(
+              page,
+              null,
+              {
+                buffer: postClickNetworkCandidate.buffer,
+                mimeType: postClickNetworkCandidate.mimeType,
+                extension: postClickNetworkCandidate.extension,
+                width: postClickNetworkCandidate.width,
+                height: postClickNetworkCandidate.height,
+              },
+              input.outputDirectory,
+            );
+          }
+
+          const postClickImage = await this.findNewGeneratedImage(
+            page,
+            initialImageSignatures,
+            true,
+          );
+
+          if (postClickImage) {
+            const postClickSnapshot = await this.captureGeneratedImageSnapshot(
+              page,
+              postClickImage,
+            );
+
+            console.log(
+              "[Gemini] Recovering generated image from DOM after download-event failure.",
+            );
+
+            return this.saveGeneratedImageFallback(
+              page,
+              postClickImage.image,
+              postClickSnapshot,
+              input.outputDirectory,
+            );
+          }
         }
       }
 
@@ -2866,8 +2961,51 @@ ${input.prompt}`
         );
       }
 
+      /*
+       * One final recovery scan protects against a race where the Download
+       * control was detected first and disappeared before Playwright could
+       * observe a download. This is intentionally done only after the normal
+       * detection/download paths have been exhausted.
+       */
+      const finalNetworkCandidate = networkCapture?.getBest() ?? null;
+
+      if (finalNetworkCandidate) {
+        return this.saveGeneratedImageFallback(
+          page,
+          null,
+          {
+            buffer: finalNetworkCandidate.buffer,
+            mimeType: finalNetworkCandidate.mimeType,
+            extension: finalNetworkCandidate.extension,
+            width: finalNetworkCandidate.width,
+            height: finalNetworkCandidate.height,
+          },
+          input.outputDirectory,
+        );
+      }
+
+      const finalImageCandidate = await this.findNewGeneratedImage(
+        page,
+        initialImageSignatures,
+        true,
+      );
+
+      if (finalImageCandidate) {
+        const finalSnapshot = await this.captureGeneratedImageSnapshot(
+          page,
+          finalImageCandidate,
+        );
+
+        return this.saveGeneratedImageFallback(
+          page,
+          finalImageCandidate.image,
+          finalSnapshot,
+          input.outputDirectory,
+        );
+      }
+
       throw new Error(
-        "Gemini finished, but the generated image could not be downloaded.",
+        "Gemini finished, but the generated image could not be downloaded or captured from the final result.",
       );
     } finally {
       networkCapture?.stop();

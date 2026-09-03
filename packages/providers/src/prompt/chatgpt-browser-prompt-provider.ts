@@ -25,6 +25,13 @@ export class ChatGPTLoginRequiredError extends Error {
   }
 }
 
+class ChatGPTUnexpectedVisualOutputError extends Error {
+  constructor() {
+    super("ChatGPT returned a visual result instead of the requested text prompt.");
+    this.name = "ChatGPTUnexpectedVisualOutputError";
+  }
+}
+
 export class ChatGPTBrowserPromptProvider implements PromptProvider {
   private context: BrowserContext | null = null;
 
@@ -650,18 +657,24 @@ No. You may make supporting adjustments only if they are necessary to fulfill th
       referenceCount > 0
         ? `
 ATTACHED IMAGE ROLES:
-- The FIRST attached image is the SOURCE IMAGE that must be edited.
+- The FIRST attached image is the SOURCE IMAGE that the downstream image model will edit.
 - The next ${referenceCount} attached image${referenceCount === 1 ? " is" : "s are"} VISUAL REFERENCE IMAGE${referenceCount === 1 ? "" : "S"} only.
-- Use the reference image${referenceCount === 1 ? "" : "s"} as visual guidance for style, material, object, color, composition detail, or other characteristics relevant to the user's request.
+- Analyze the reference image${referenceCount === 1 ? "" : "s"} silently and use only the relevant visual characteristics to improve the final text prompt.
 - Do NOT treat a reference image as the main image to edit.
 - Do NOT copy unrelated content from a reference image into the source.
+- Do NOT describe your image analysis to the user. Convert what matters directly into the final edit prompt.
 `
         : "";
 
     return `
-You are writing a final image-editing prompt for Gemini / Nano Banana.
+TEXT-ONLY PROMPT-WRITER MODE.
+DO NOT generate, edit, transform, or return an image.
+DO NOT invoke any image-generation or image-editing tool, even though images are attached.
+The attached images are INPUTS TO ANALYZE ONLY. Another model (Gemini / Nano Banana) will perform the actual image edit later.
 
-Your job is to convert the user's request into a clean, precise image-editing prompt based on the uploaded source image.
+You are writing the final image-editing prompt that will be sent to Gemini / Nano Banana.
+
+Your job is to inspect the uploaded source image${referenceCount > 0 ? " and visual references" : ""}, reason silently about them, and convert the user's request into one clean, precise TEXT prompt.
 
 IMPORTANT RULES:
 - Respect the actual content of the source image.
@@ -672,9 +685,11 @@ IMPORTANT RULES:
 ${preservationRules}
 
 OUTPUT REQUIREMENTS:
-- Return only the final prompt text.
-- Do not include explanations.
-- Do not include labels like "USER REQUEST" or "ANALYSIS".
+- TEXT ONLY. Never return an image or visual result.
+- Return exactly one final prompt as plain text.
+- Do not include explanations, analysis, commentary, headings, bullet labels, or preambles.
+- Do not include labels like "USER REQUEST", "ANALYSIS", "FINAL PROMPT", or "PROMPT".
+- Do not say what you observed in the images separately; incorporate only relevant observations into the edit instruction.
 - Write the prompt as a direct instruction for image editing.
 
 EDIT PRESET:
@@ -694,6 +709,8 @@ ${unrestricted ? "- avoid adding preservation requirements the user did not ask 
 - match the true type of the source image
 - avoid hallucinating new content
 - be suitable for Gemini / Nano Banana image editing
+
+FINAL REMINDER: reply with the prompt TEXT ONLY. Do not create or edit an image yourself.
 `.trim();
   }
 
@@ -865,6 +882,7 @@ ${unrestricted ? "- avoid adding preservation requirements the user did not ask 
     let stableIterations = 0;
     let lastProgressLogAt = 0;
     let lastApiProbeAt = 0;
+    let visualOutputFirstSeenAt: number | null = null;
 
     while (Date.now() < deadline) {
       if (page.isClosed()) {
@@ -903,11 +921,16 @@ ${unrestricted ? "- avoid adding preservation requirements the user did not ask 
        * If there are at least two new turns, the newest turn is the assistant
        * response even when ChatGPT no longer exposes data-message-author-role.
        */
-      if (!text && turnCount >= initialTurnCount + 2) {
+      let latestAssistantTurnHasVisualOutput = false;
+
+      if (turnCount >= initialTurnCount + 2) {
         const candidate = turns.last();
         const candidateText = (await candidate.innerText().catch(() => "")).trim();
+        const imageCount = await candidate.locator("img").count().catch(() => 0);
 
-        if (candidateText.length > 30) {
+        latestAssistantTurnHasVisualOutput = imageCount > 0;
+
+        if (!text && candidateText.length > 30) {
           text = candidateText;
           source = "conversation-turn";
         }
@@ -928,11 +951,37 @@ ${unrestricted ? "- avoid adding preservation requirements the user did not ask 
         }
       }
 
+      const stopButton = page.locator(
+        [
+          '[data-testid="stop-button"]',
+          'button[aria-label*="Stop" i]',
+          'button[aria-label*="إيقاف"]',
+        ].join(","),
+      );
+
+      const generating =
+        (await stopButton.count().catch(() => 0)) > 0 &&
+        (await stopButton.last().isVisible().catch(() => false));
+
+      if (latestAssistantTurnHasVisualOutput) {
+        visualOutputFirstSeenAt ??= Date.now();
+
+        // Give ChatGPT a brief chance to finish a tool card. Once generation
+        // has stopped and the newest assistant turn still contains an image,
+        // treat it as the wrong response type and recover with a text-only turn.
+        if (!generating && Date.now() - visualOutputFirstSeenAt >= 2_000) {
+          console.warn("[ChatGPT] Visual output detected instead of text prompt.");
+          throw new ChatGPTUnexpectedVisualOutputError();
+        }
+      } else {
+        visualOutputFirstSeenAt = null;
+      }
+
       const isNewResponse =
         text.length > 30 &&
         (count > initialAssistantCount || text !== initialAssistantText);
 
-      if (isNewResponse) {
+      if (isNewResponse && !latestAssistantTurnHasVisualOutput) {
         if (text === previousCandidate) {
           stableIterations += 1;
         } else {
@@ -940,18 +989,6 @@ ${unrestricted ? "- avoid adding preservation requirements the user did not ask 
           stableIterations = 0;
           console.log(`[ChatGPT] Response candidate detected via ${source}.`);
         }
-
-        const stopButton = page.locator(
-          [
-            '[data-testid="stop-button"]',
-            'button[aria-label*="Stop" i]',
-            'button[aria-label*="إيقاف"]',
-          ].join(","),
-        );
-
-        const generating =
-          (await stopButton.count().catch(() => 0)) > 0 &&
-          (await stopButton.last().isVisible().catch(() => false));
 
         if (stableIterations >= 2 && !generating) {
           console.log(`[ChatGPT] Prompt result received via ${source}.`);
@@ -992,6 +1029,7 @@ ${unrestricted ? "- avoid adding preservation requirements the user did not ask 
     return text
       .replace(/^```(?:text|markdown)?\s*/i, "")
       .replace(/```\s*$/i, "")
+      .replace(/^\s*(?:final\s+prompt|prompt)\s*:\s*/i, "")
       .trim();
   }
 
@@ -1102,15 +1140,71 @@ ${unrestricted ? "- avoid adding preservation requirements the user did not ask 
         message: "ChatGPT is analyzing the render and building the prompt...",
       });
 
-      const responseTimeoutMs = referenceImages.length > 0 ? 150_000 : 90_000;
+      const responseTimeoutMs = referenceImages.length > 0 ? 210_000 : 90_000;
 
-      const response = await this.waitForAssistantResponse(
-        page,
-        initialAssistantCount,
-        initialAssistantText,
-        initialTurnCount,
-        responseTimeoutMs,
-      );
+      let response: string;
+
+      try {
+        response = await this.waitForAssistantResponse(
+          page,
+          initialAssistantCount,
+          initialAssistantText,
+          initialTurnCount,
+          responseTimeoutMs,
+        );
+      } catch (error) {
+        if (!(error instanceof ChatGPTUnexpectedVisualOutputError)) {
+          throw error;
+        }
+
+        console.warn(
+          "[ChatGPT] Recovering from unexpected visual response with a text-only follow-up.",
+        );
+
+        await input.onProgress?.({
+          stage: "CHATGPT_WAITING_RESPONSE",
+          message: "ChatGPT returned a visual result. Requesting the text prompt only...",
+        });
+
+        const recoveryComposer = await this.findComposer(page);
+        if (!recoveryComposer) {
+          throw new Error("ChatGPT returned an image instead of a prompt, and the composer could not be found for recovery.");
+        }
+
+        const recoveryAssistantMessages = page.locator('[data-message-author-role="assistant"]');
+        const recoveryAssistantCount = await recoveryAssistantMessages.count().catch(() => 0);
+        const recoveryAssistantText =
+          recoveryAssistantCount > 0
+            ? (await recoveryAssistantMessages.last().innerText().catch(() => "")).trim()
+            : "";
+
+        let recoveryTurns = page.locator('article[data-testid^="conversation-turn-"]');
+        let recoveryTurnCount = await recoveryTurns.count().catch(() => 0);
+        if (recoveryTurnCount === 0) {
+          recoveryTurns = page.locator('[data-testid^="conversation-turn-"]');
+          recoveryTurnCount = await recoveryTurns.count().catch(() => 0);
+        }
+
+        await this.submitPrompt(
+          page,
+          recoveryComposer,
+          [
+            "TEXT ONLY. Do not generate or edit an image.",
+            "Your previous response was a visual result, but I need only the final image-editing prompt for another model.",
+            "Using the same source image, reference images, user request, and preservation rules from the previous turn, return exactly one plain-text edit prompt.",
+            "No explanation, no analysis, no heading, no label, and no image output.",
+          ].join(" "),
+        );
+
+        response = await this.waitForAssistantResponse(
+          page,
+          recoveryAssistantCount,
+          recoveryAssistantText,
+          recoveryTurnCount,
+          120_000,
+        );
+      }
+
       const cleaned = this.cleanResponse(response);
 
       if (!cleaned) {

@@ -38,6 +38,8 @@ import {
   Square,
   Trash2,
   Type,
+  Undo2,
+  Redo2,
   X,
   ZoomIn,
   ZoomOut,
@@ -47,6 +49,7 @@ import {
   useCancelGeneration,
   useCreateFlowImageGeneration,
   useRefineFlowPrompt,
+  useRetryGeneration,
 } from "@/hooks/use-prompt-generation";
 import { useChatGPTStatus, useGeminiStatus } from "@/hooks/use-provider-settings";
 import { apiGet, apiUpload, getAssetUrl } from "@/lib/api";
@@ -195,6 +198,20 @@ type AddMenuState = {
   pending: PendingConnection;
 } | null;
 
+type FlowHistorySnapshot = {
+  nodes: CanvasNode[];
+  hiddenGenerationIds: string[];
+  hiddenNodeIds: string[];
+};
+
+type CanvasEdge = {
+  id: string;
+  fromId: string;
+  toId: string;
+  target: "ASSISTANT_TEXT" | "GENERATOR_PROMPT" | "GENERATOR_SOURCE" | "GENERATOR_REFERENCE";
+  referenceIndex?: number;
+};
+
 type RenderFlowEditorProps = {
   projectId: string;
   sessionId: string;
@@ -209,6 +226,9 @@ const MAX_ZOOM = 1.55;
 const TEXT_SIZE = { width: 430, height: 270 };
 const ASSISTANT_SIZE = { width: 380, height: 365 };
 const GENERATOR_SIZE = { width: 455, height: 410 };
+const AUTO_LAYOUT_MARGIN = 44;
+const AUTO_LAYOUT_ROW_GAP = 110;
+const AUTO_LAYOUT_COLUMN_GAP = 120;
 const IMAGE_SIZE = { width: 245, height: 205 };
 
 function clamp(value: number, min: number, max: number) {
@@ -420,6 +440,119 @@ function rehydrateDraftNode(node: CanvasNode): CanvasNode {
   };
 }
 
+function getReferenceIdentity(image: ImageNodeData) {
+  if (image.role !== "REFERENCE") return null;
+
+  const fileName = image.fileName.trim().toLowerCase();
+  const mimeType = image.mimeType.trim().toLowerCase();
+  if (!fileName) return null;
+
+  return `${fileName}::${mimeType}`;
+}
+
+function dedupeFlowImageNodes(nodes: CanvasNode[]) {
+  const sourceNodeByAssetId = new Map<string, string>();
+  const referenceNodeByIdentity = new Map<string, string>();
+  const nodeIdRemap = new Map<string, string>();
+  const kept: CanvasNode[] = [];
+
+  for (const node of nodes) {
+    if (node.kind !== "IMAGE") {
+      kept.push(node);
+      continue;
+    }
+
+    const image = node.data as ImageNodeData;
+    const sourceAssetId = image.role === "SOURCE" ? image.asset?.id : undefined;
+    const referenceIdentity = getReferenceIdentity(image);
+
+    if (sourceAssetId) {
+      const existingNodeId = sourceNodeByAssetId.get(sourceAssetId);
+      if (existingNodeId) {
+        nodeIdRemap.set(node.id, existingNodeId);
+        continue;
+      }
+      sourceNodeByAssetId.set(sourceAssetId, node.id);
+    }
+
+    if (referenceIdentity) {
+      const existingNodeId = referenceNodeByIdentity.get(referenceIdentity);
+      if (existingNodeId) {
+        nodeIdRemap.set(node.id, existingNodeId);
+        continue;
+      }
+      referenceNodeByIdentity.set(referenceIdentity, node.id);
+    }
+
+    kept.push(node);
+  }
+
+  if (nodeIdRemap.size === 0) return kept;
+
+  return kept.map((node) => {
+    if (node.kind === "ASSISTANT") {
+      const data = node.data as AssistantNodeData;
+      const textNodeId = data.textNodeId ? nodeIdRemap.get(data.textNodeId) ?? data.textNodeId : null;
+      return textNodeId === data.textNodeId ? node : { ...node, data: { ...data, textNodeId } };
+    }
+
+    if (node.kind !== "IMAGE_GENERATOR") return node;
+
+    const data = node.data as GeneratorNodeData;
+    const sourceNodeId = data.sourceNodeId ? nodeIdRemap.get(data.sourceNodeId) ?? data.sourceNodeId : null;
+    const referenceNodeIds = [
+      ...new Set(data.referenceNodeIds.map((referenceNodeId) => nodeIdRemap.get(referenceNodeId) ?? referenceNodeId)),
+    ].slice(0, 5);
+
+    return {
+      ...node,
+      data: {
+        ...data,
+        sourceNodeId,
+        referenceNodeIds,
+      } satisfies GeneratorNodeData,
+    };
+  });
+}
+
+function cloneCanvasNodes(nodes: CanvasNode[]) {
+  return nodes.map((node) => {
+    if (node.kind === "IMAGE_GENERATOR") {
+      const data = node.data as GeneratorNodeData;
+      return { ...node, data: { ...data, referenceNodeIds: [...data.referenceNodeIds] } } as CanvasNode;
+    }
+
+    return { ...node, data: { ...node.data } } as CanvasNode;
+  });
+}
+
+function makeHistorySnapshot(
+  nodes: CanvasNode[],
+  hiddenGenerationIds: string[],
+  hiddenNodeIds: string[],
+): FlowHistorySnapshot {
+  return {
+    nodes: cloneCanvasNodes(nodes),
+    hiddenGenerationIds: [...hiddenGenerationIds],
+    hiddenNodeIds: [...hiddenNodeIds],
+  };
+}
+
+function historySnapshotSignature(snapshot: FlowHistorySnapshot) {
+  return JSON.stringify(snapshot, (key, value) => {
+    if (key === "localFile" && value) {
+      const file = value as File;
+      return {
+        name: file.name,
+        size: file.size,
+        type: file.type,
+        lastModified: file.lastModified,
+      };
+    }
+    return value;
+  });
+}
+
 function mergeSavedDraftNodes(base: CanvasNode[], savedDraftNodes: CanvasNode[]) {
   const saved = savedDraftNodes.map(rehydrateDraftNode);
   const hasSavedWorkflow = saved.some(
@@ -443,21 +576,67 @@ function mergeSavedDraftNodes(base: CanvasNode[], savedDraftNodes: CanvasNode[])
     }
   }
 
-  return mergedBase;
+  return dedupeFlowImageNodes(mergedBase);
+}
+
+function generationAttemptKey(generation: FlowGeneration) {
+  const references = generation.referenceImages
+    .map((reference) => `${reference.fileName.trim().toLowerCase()}::${reference.mimeType.trim().toLowerCase()}`)
+    .sort()
+    .join("|");
+
+  return [
+    generation.sourceAssetId,
+    generation.userInstruction.trim(),
+    generation.preserveMode,
+    generation.preserveEverythingElse ? "1" : "0",
+    references,
+  ].join("::");
+}
+
+function getVisibleFlowGenerations(generations: FlowGeneration[]) {
+  const latestIndexByAttempt = new Map<string, number>();
+
+  for (let index = 0; index < generations.length; index += 1) {
+    latestIndexByAttempt.set(generationAttemptKey(generations[index]!), index);
+  }
+
+  return generations.filter((generation, index) => {
+    if (generation.status !== "FAILED" && generation.status !== "CANCELED") return true;
+
+    const latestIndex = latestIndexByAttempt.get(generationAttemptKey(generation));
+    return latestIndex === undefined || latestIndex === index;
+  });
 }
 
 function makeInitialNodes(data: FlowData): CanvasNode[] {
-  if (data.generations.length > 0) {
-    const historyNodes = data.generations.flatMap((generation, index) => makeGenerationNodes(generation, index));
+  const visibleGenerations = getVisibleFlowGenerations(data.generations);
+
+  if (visibleGenerations.length > 0) {
+    const historyNodes = visibleGenerations.flatMap((generation, index) => makeGenerationNodes(generation, index));
     const visibleAssetIds = new Set(
       historyNodes
         .filter((node) => node.kind === "IMAGE")
         .map((node) => (node.data as ImageNodeData).asset?.id)
         .filter((id): id is string => Boolean(id)),
     );
-    const looseFlowInputs = data.session.assets.filter(
-      (asset) => asset.type === "FLOW_INPUT" && !visibleAssetIds.has(asset.id),
+    const historicalReferencePaths = new Set(
+      visibleGenerations.flatMap((generation) => generation.referenceImages.map((reference) => reference.filePath)),
     );
+    const historicalReferenceIdentities = new Set(
+      visibleGenerations.flatMap((generation) =>
+        generation.referenceImages.map(
+          (reference) => `${reference.fileName.trim().toLowerCase()}::${reference.mimeType.trim().toLowerCase()}`,
+        ),
+      ),
+    );
+    const looseFlowInputs = data.session.assets.filter((asset) => {
+      if (asset.type !== "FLOW_INPUT" || visibleAssetIds.has(asset.id)) return false;
+      if (historicalReferencePaths.has(asset.filePath)) return false;
+
+      const identity = `${asset.fileName.trim().toLowerCase()}::${asset.mimeType.trim().toLowerCase()}`;
+      return !historicalReferenceIdentities.has(identity);
+    });
 
     looseFlowInputs.forEach((asset, index) => {
       historyNodes.push(
@@ -472,7 +651,7 @@ function makeInitialNodes(data: FlowData): CanvasNode[] {
       );
     });
 
-    return historyNodes;
+    return dedupeFlowImageNodes(historyNodes);
   }
 
   const source = data.session.assets.find((asset) => asset.type === "ORIGINAL") ?? data.session.assets[0];
@@ -564,6 +743,7 @@ export function RenderFlowEditor({ projectId, sessionId }: RenderFlowEditorProps
   const router = useRouter();
   const refinePrompt = useRefineFlowPrompt();
   const createImageGeneration = useCreateFlowImageGeneration();
+  const retryGeneration = useRetryGeneration();
   const cancelGeneration = useCancelGeneration();
   const chatGPTStatus = useChatGPTStatus();
   const geminiStatus = useGeminiStatus();
@@ -574,6 +754,13 @@ export function RenderFlowEditor({ projectId, sessionId }: RenderFlowEditorProps
   const initializedRef = useRef(false);
   const referenceDropPointRef = useRef({ x: 360, y: 720 });
   const referenceTargetGeneratorRef = useRef<string | null>(null);
+  const undoStackRef = useRef<FlowHistorySnapshot[]>([]);
+  const redoStackRef = useRef<FlowHistorySnapshot[]>([]);
+  const currentHistorySnapshotRef = useRef<FlowHistorySnapshot | null>(null);
+  const historyTimerRef = useRef<number | null>(null);
+  const historyReadyRef = useRef(false);
+  const applyingHistoryRef = useRef(false);
+  const suppressNextHistoryRef = useRef(false);
   const preparedImageDragsRef = useRef(
     new Map<string, { filePath: string; iconPath?: string | null }>(),
   );
@@ -598,6 +785,7 @@ export function RenderFlowEditor({ projectId, sessionId }: RenderFlowEditorProps
   const [addMenu, setAddMenu] = useState<AddMenuState>(null);
   const [toast, setToast] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [historyVersion, setHistoryVersion] = useState(0);
 
   const flowQuery = useQuery({
     queryKey: ["render-flow", projectId, sessionId],
@@ -610,7 +798,36 @@ export function RenderFlowEditor({ projectId, sessionId }: RenderFlowEditorProps
   });
 
   const flowData = flowQuery.data;
+  const visibleFlowGenerations = useMemo(
+    () => getVisibleFlowGenerations(flowData?.generations ?? []),
+    [flowData],
+  );
   const nodeById = useMemo(() => new Map(nodes.map((node) => [node.id, node])), [nodes]);
+
+  const selectedGroupBounds = useMemo(() => {
+    if (selectedNodeIds.length < 2) return null;
+
+    const selectedNodes = selectedNodeIds
+      .map((nodeId) => nodeById.get(nodeId))
+      .filter((node): node is CanvasNode => Boolean(node));
+
+    if (selectedNodes.length < 2) return null;
+
+    const padding = 18;
+    const left = Math.min(...selectedNodes.map((node) => node.x)) - padding;
+    const top = Math.min(...selectedNodes.map((node) => node.y)) - padding;
+    const right = Math.max(...selectedNodes.map((node) => node.x + node.width)) + padding;
+    const bottom = Math.max(...selectedNodes.map((node) => node.y + node.height)) + padding;
+
+    return {
+      left,
+      top,
+      right,
+      bottom,
+      width: right - left,
+      height: bottom - top,
+    };
+  }, [nodeById, selectedNodeIds]);
 
   const generationById = useMemo(
     () => new Map((flowData?.generations ?? []).map((generation) => [generation.id, generation])),
@@ -684,6 +901,7 @@ export function RenderFlowEditor({ projectId, sessionId }: RenderFlowEditorProps
       return;
     }
 
+    suppressNextHistoryRef.current = true;
     setNodes((current) => {
       const representedGenerationIds = new Set<string>();
       for (const node of current) {
@@ -753,20 +971,20 @@ export function RenderFlowEditor({ projectId, sessionId }: RenderFlowEditorProps
 
       const hidden = new Set(hiddenGenerationIds);
       const hiddenNodes = new Set(hiddenNodeIds);
-      const missing = flowData.generations.filter(
+      const missing = visibleFlowGenerations.filter(
         (generation) => !representedGenerationIds.has(generation.id) && !hidden.has(generation.id),
       );
-      if (missing.length === 0) return synced;
+      if (missing.length === 0) return dedupeFlowImageNodes(synced);
 
-      const baseIndex = flowData.generations.length - missing.length;
-      return [
+      const baseIndex = visibleFlowGenerations.length - missing.length;
+      return dedupeFlowImageNodes([
         ...synced,
         ...missing
           .flatMap((generation, index) => makeGenerationNodes(generation, baseIndex + index))
           .filter((node) => !hiddenNodes.has(node.id)),
-      ];
+      ]);
     });
-  }, [flowData, generationById, hiddenGenerationIds, hiddenNodeIds, projectId, sessionId]);
+  }, [flowData, generationById, hiddenGenerationIds, hiddenNodeIds, projectId, sessionId, visibleFlowGenerations]);
 
   useEffect(() => {
     if (!initializedRef.current) return;
@@ -785,6 +1003,64 @@ export function RenderFlowEditor({ projectId, sessionId }: RenderFlowEditorProps
 
     return () => window.clearTimeout(id);
   }, [camera, hiddenGenerationIds, hiddenNodeIds, nodes, projectId, sessionId]);
+
+  useEffect(() => {
+    if (!initializedRef.current) return;
+
+    const snapshot = makeHistorySnapshot(nodes, hiddenGenerationIds, hiddenNodeIds);
+
+    if (!historyReadyRef.current) {
+      historyReadyRef.current = true;
+      currentHistorySnapshotRef.current = snapshot;
+      return;
+    }
+
+    if (applyingHistoryRef.current) {
+      applyingHistoryRef.current = false;
+      currentHistorySnapshotRef.current = snapshot;
+      return;
+    }
+
+    if (suppressNextHistoryRef.current) {
+      suppressNextHistoryRef.current = false;
+      currentHistorySnapshotRef.current = snapshot;
+      return;
+    }
+
+    if (historyTimerRef.current !== null) {
+      window.clearTimeout(historyTimerRef.current);
+    }
+
+    historyTimerRef.current = window.setTimeout(() => {
+      historyTimerRef.current = null;
+      const previous = currentHistorySnapshotRef.current;
+      if (!previous) {
+        currentHistorySnapshotRef.current = snapshot;
+        return;
+      }
+
+      if (historySnapshotSignature(previous) === historySnapshotSignature(snapshot)) return;
+
+      undoStackRef.current.push(previous);
+      if (undoStackRef.current.length > 80) undoStackRef.current.shift();
+      redoStackRef.current = [];
+      currentHistorySnapshotRef.current = snapshot;
+      setHistoryVersion((value) => value + 1);
+    }, 260);
+
+    return () => {
+      if (historyTimerRef.current !== null) {
+        window.clearTimeout(historyTimerRef.current);
+        historyTimerRef.current = null;
+      }
+    };
+  }, [hiddenGenerationIds, hiddenNodeIds, nodes]);
+
+  useEffect(() => {
+    return () => {
+      if (historyTimerRef.current !== null) window.clearTimeout(historyTimerRef.current);
+    };
+  }, []);
 
   useEffect(() => {
     if (!nodeDrag && !panDrag && !selectionDrag) return;
@@ -876,6 +1152,78 @@ export function RenderFlowEditor({ projectId, sessionId }: RenderFlowEditorProps
     };
   }, [camera.zoom, nodeDrag, panDrag, selectionDrag]);
 
+  function applyHistorySnapshot(snapshot: FlowHistorySnapshot) {
+    applyingHistoryRef.current = true;
+    setNodes(cloneCanvasNodes(snapshot.nodes));
+    setHiddenGenerationIds([...snapshot.hiddenGenerationIds]);
+    setHiddenNodeIds([...snapshot.hiddenNodeIds]);
+    setSelectedNodeIds([]);
+    setPendingConnection(null);
+    setAddMenu(null);
+    setSelectionDrag(null);
+    setNodeDrag(null);
+  }
+
+  function undoFlow() {
+    if (historyTimerRef.current !== null) {
+      window.clearTimeout(historyTimerRef.current);
+      historyTimerRef.current = null;
+    }
+
+    const live = makeHistorySnapshot(nodes, hiddenGenerationIds, hiddenNodeIds);
+    const committed = currentHistorySnapshotRef.current;
+    let target: FlowHistorySnapshot | undefined;
+
+    if (committed && historySnapshotSignature(live) !== historySnapshotSignature(committed)) {
+      target = committed;
+    } else {
+      target = undoStackRef.current.pop();
+    }
+
+    if (!target) return;
+
+    redoStackRef.current.push(live);
+    if (redoStackRef.current.length > 80) redoStackRef.current.shift();
+    currentHistorySnapshotRef.current = makeHistorySnapshot(
+      target.nodes,
+      target.hiddenGenerationIds,
+      target.hiddenNodeIds,
+    );
+    applyHistorySnapshot(target);
+    setHistoryVersion((value) => value + 1);
+  }
+
+  function redoFlow() {
+    if (historyTimerRef.current !== null) {
+      window.clearTimeout(historyTimerRef.current);
+      historyTimerRef.current = null;
+    }
+
+    const target = redoStackRef.current.pop();
+    if (!target) return;
+
+    const live = makeHistorySnapshot(nodes, hiddenGenerationIds, hiddenNodeIds);
+    undoStackRef.current.push(live);
+    if (undoStackRef.current.length > 80) undoStackRef.current.shift();
+    currentHistorySnapshotRef.current = makeHistorySnapshot(
+      target.nodes,
+      target.hiddenGenerationIds,
+      target.hiddenNodeIds,
+    );
+    applyHistorySnapshot(target);
+    setHistoryVersion((value) => value + 1);
+  }
+
+  const liveHistorySnapshot = makeHistorySnapshot(nodes, hiddenGenerationIds, hiddenNodeIds);
+  const canUndo =
+    undoStackRef.current.length > 0 ||
+    Boolean(
+      currentHistorySnapshotRef.current &&
+        historySnapshotSignature(liveHistorySnapshot) !== historySnapshotSignature(currentHistorySnapshotRef.current),
+    );
+  const canRedo = redoStackRef.current.length > 0;
+  void historyVersion;
+
   useEffect(() => {
     function handleKeyDown(event: KeyboardEvent) {
       const target = event.target as HTMLElement | null;
@@ -884,6 +1232,21 @@ export function RenderFlowEditor({ projectId, sessionId }: RenderFlowEditorProps
 
       if (event.code === "Space" && !event.repeat && !isEditing) {
         setSpaceHeld(true);
+      }
+
+      const commandKey = event.ctrlKey || event.metaKey;
+      const lowerKey = event.key.toLowerCase();
+      if (commandKey && !event.altKey && !isEditing && lowerKey === "z") {
+        event.preventDefault();
+        if (event.shiftKey) redoFlow();
+        else undoFlow();
+        return;
+      }
+
+      if (commandKey && !event.altKey && !event.shiftKey && !isEditing && lowerKey === "y") {
+        event.preventDefault();
+        redoFlow();
+        return;
       }
 
       if (event.key === "Escape") {
@@ -938,13 +1301,7 @@ export function RenderFlowEditor({ projectId, sessionId }: RenderFlowEditorProps
   }, [nodes]);
 
   const edges = useMemo(() => {
-    const result: Array<{
-      id: string;
-      fromId: string;
-      toId: string;
-      target: "ASSISTANT_TEXT" | "GENERATOR_PROMPT" | "GENERATOR_SOURCE" | "GENERATOR_REFERENCE";
-      referenceIndex?: number;
-    }> = [];
+    const result: CanvasEdge[] = [];
 
     for (const node of nodes) {
       if (node.kind === "ASSISTANT") {
@@ -1003,6 +1360,7 @@ export function RenderFlowEditor({ projectId, sessionId }: RenderFlowEditorProps
   }
 
   function startNodeDrag(event: ReactPointerEvent, node: CanvasNode) {
+    if (pendingConnection) return;
     if (event.button !== 0 || tool === "PAN" || spaceHeld) return;
     const target = event.target as HTMLElement;
     if (target.closest("button, textarea, input, select, [data-native-image-drag]")) return;
@@ -1070,6 +1428,29 @@ export function RenderFlowEditor({ projectId, sessionId }: RenderFlowEditorProps
 
     setAddMenu(null);
     const world = screenToWorld(event.clientX, event.clientY);
+
+    if (
+      !event.shiftKey &&
+      selectedGroupBounds &&
+      world.x >= selectedGroupBounds.left &&
+      world.x <= selectedGroupBounds.right &&
+      world.y >= selectedGroupBounds.top &&
+      world.y <= selectedGroupBounds.bottom
+    ) {
+      event.preventDefault();
+      setNodeDrag({
+        nodeIds: [...selectedNodeIds],
+        startClientX: event.clientX,
+        startClientY: event.clientY,
+        startPositions: Object.fromEntries(
+          nodes
+            .filter((node) => selectedNodeIds.includes(node.id))
+            .map((node) => [node.id, { x: node.x, y: node.y }]),
+        ),
+      });
+      return;
+    }
+
     const initialSelection = event.shiftKey ? selectedNodeIds : [];
 
     if (!event.shiftKey) setSelectedNodeIds([]);
@@ -1243,15 +1624,90 @@ export function RenderFlowEditor({ projectId, sessionId }: RenderFlowEditorProps
     return `Image #${count}`;
   }
 
+  function rectanglesOverlap(
+    a: { x: number; y: number; width: number; height: number },
+    b: { x: number; y: number; width: number; height: number },
+    margin = AUTO_LAYOUT_MARGIN,
+  ) {
+    return !(
+      a.x + a.width + margin <= b.x ||
+      b.x + b.width + margin <= a.x ||
+      a.y + a.height + margin <= b.y ||
+      b.y + b.height + margin <= a.y
+    );
+  }
+
+  function isNodeRectFree(rect: { x: number; y: number; width: number; height: number }, ignoreNodeIds: string[] = []) {
+    const ignored = new Set(ignoreNodeIds);
+    return nodes.every((node) => {
+      if (ignored.has(node.id)) return true;
+      return !rectanglesOverlap(rect, node);
+    });
+  }
+
+  function findFreeNodePosition(x: number, y: number, width: number, height: number) {
+    let candidateX = Math.max(24, x);
+    let candidateY = Math.max(24, y);
+
+    for (let row = 0; row < 40; row += 1) {
+      const rect = { x: candidateX, y: candidateY, width, height };
+      if (isNodeRectFree(rect)) {
+        return { x: candidateX, y: candidateY };
+      }
+      candidateY += height + AUTO_LAYOUT_ROW_GAP;
+      if (candidateY + height > WORLD_HEIGHT - 80) {
+        candidateY = Math.max(24, y);
+        candidateX += width + AUTO_LAYOUT_COLUMN_GAP;
+      }
+    }
+
+    return { x: candidateX, y: candidateY };
+  }
+
+  function findFreePipelinePosition(x: number, y: number) {
+    const offsets = [
+      { x: 0, y: 0, width: TEXT_SIZE.width, height: TEXT_SIZE.height },
+      { x: 510, y: -10, width: ASSISTANT_SIZE.width, height: ASSISTANT_SIZE.height },
+      { x: 975, y: -20, width: GENERATOR_SIZE.width, height: GENERATOR_SIZE.height },
+    ];
+
+    let candidateX = Math.max(24, x);
+    let candidateY = Math.max(120, y);
+
+    for (let row = 0; row < 40; row += 1) {
+      const blocked = offsets.some((offset) =>
+        !isNodeRectFree({
+          x: candidateX + offset.x,
+          y: candidateY + offset.y,
+          width: offset.width,
+          height: offset.height,
+        }),
+      );
+
+      if (!blocked) {
+        return { x: candidateX, y: candidateY };
+      }
+
+      candidateY += Math.max(TEXT_SIZE.height, ASSISTANT_SIZE.height, GENERATOR_SIZE.height) + AUTO_LAYOUT_ROW_GAP;
+      if (candidateY + GENERATOR_SIZE.height > WORLD_HEIGHT - 80) {
+        candidateY = Math.max(120, y);
+        candidateX += TEXT_SIZE.width + ASSISTANT_SIZE.width + GENERATOR_SIZE.width + AUTO_LAYOUT_COLUMN_GAP;
+      }
+    }
+
+    return { x: candidateX, y: candidateY };
+  }
+
   function createTextNode(x: number, y: number) {
     const id = `draft-text-${crypto.randomUUID()}`;
+    const position = findFreeNodePosition(x, y, TEXT_SIZE.width, TEXT_SIZE.height);
     setNodes((current) => [
       ...current,
       {
         id,
         kind: "TEXT",
-        x,
-        y,
+        x: position.x,
+        y: position.y,
         width: TEXT_SIZE.width,
         height: TEXT_SIZE.height,
         data: { title: nextTitle("TEXT"), text: "" } satisfies TextNodeData,
@@ -1263,13 +1719,14 @@ export function RenderFlowEditor({ projectId, sessionId }: RenderFlowEditorProps
 
   function createAssistantNode(x: number, y: number, textNodeId: string | null = null) {
     const id = `draft-assistant-${crypto.randomUUID()}`;
+    const position = findFreeNodePosition(x, y, ASSISTANT_SIZE.width, ASSISTANT_SIZE.height);
     setNodes((current) => [
       ...current,
       {
         id,
         kind: "ASSISTANT",
-        x,
-        y,
+        x: position.x,
+        y: position.y,
         width: ASSISTANT_SIZE.width,
         height: ASSISTANT_SIZE.height,
         data: {
@@ -1288,13 +1745,14 @@ export function RenderFlowEditor({ projectId, sessionId }: RenderFlowEditorProps
 
   function createGeneratorNode(x: number, y: number, promptNodeId: string | null = null, sourceNodeId: string | null = null) {
     const id = `draft-generator-${crypto.randomUUID()}`;
+    const position = findFreeNodePosition(x, y, GENERATOR_SIZE.width, GENERATOR_SIZE.height);
     setNodes((current) => [
       ...current,
       {
         id,
         kind: "IMAGE_GENERATOR",
-        x,
-        y,
+        x: position.x,
+        y: position.y,
         width: GENERATOR_SIZE.width,
         height: GENERATOR_SIZE.height,
         data: {
@@ -1315,11 +1773,13 @@ export function RenderFlowEditor({ projectId, sessionId }: RenderFlowEditorProps
     return id;
   }
 
-  function createPipeline(x: number, y: number) {
+  function createPipeline(x: number, y: number, preferredSourceNodeId: string | null = null) {
     const latestGenerator = [...nodes]
       .reverse()
       .find((node) => node.kind === "IMAGE_GENERATOR" && Boolean((node.data as GeneratorNodeData).outputAsset));
-    const sourceImage = latestGenerator ?? nodes.find((node) => node.kind === "IMAGE" && Boolean((node.data as ImageNodeData).asset));
+    const preferredSource = preferredSourceNodeId ? nodeById.get(preferredSourceNodeId) ?? null : null;
+    const fallbackSource = nodes.find((node) => node.kind === "IMAGE" && Boolean((node.data as ImageNodeData).asset)) ?? null;
+    const sourceImage = preferredSource ?? latestGenerator ?? fallbackSource;
 
     const rightMostEdge = nodes.length > 0
       ? Math.max(...nodes.map((node) => node.x + node.width))
@@ -1327,62 +1787,94 @@ export function RenderFlowEditor({ projectId, sessionId }: RenderFlowEditorProps
     const topMostNode = nodes.length > 0
       ? Math.min(...nodes.map((node) => node.y))
       : y;
-    const pipelineX = Math.max(x, rightMostEdge + 180);
-    const pipelineY = Math.max(120, Math.min(y, topMostNode + 80));
+    const desiredX = Math.max(x, rightMostEdge + 180);
+    const desiredY = Math.max(120, Math.min(y, topMostNode + 80));
+    const { x: pipelineX, y: pipelineY } = findFreePipelinePosition(desiredX, desiredY);
 
     const textId = `draft-text-${crypto.randomUUID()}`;
     const assistantId = `draft-assistant-${crypto.randomUUID()}`;
     const generatorId = `draft-generator-${crypto.randomUUID()}`;
+    const sourceCloneId = `draft-source-${crypto.randomUUID()}`;
     const number = nodes.filter((node) => node.kind === "IMAGE_GENERATOR").length + 1;
+    const nextSourceCount = nodes.filter((node) => node.kind === "IMAGE" && (node.data as ImageNodeData).role === "SOURCE").length + 1;
 
-    setNodes((current) => [
-      ...current,
-      {
-        id: textId,
-        kind: "TEXT",
-        x: pipelineX,
-        y: pipelineY,
-        width: TEXT_SIZE.width,
-        height: TEXT_SIZE.height,
-        data: { title: `Text #${number}`, text: "" } satisfies TextNodeData,
-      },
-      {
-        id: assistantId,
-        kind: "ASSISTANT",
-        x: pipelineX + 510,
-        y: pipelineY - 10,
-        width: ASSISTANT_SIZE.width,
-        height: ASSISTANT_SIZE.height,
-        data: {
-          title: `Assistant #${number}`,
-          textNodeId: textId,
-          outputText: "",
-          state: "IDLE",
-          errorMessage: null,
-          includeReferences: false,
-        } satisfies AssistantNodeData,
-      },
-      {
-        id: generatorId,
-        kind: "IMAGE_GENERATOR",
-        x: pipelineX + 975,
-        y: pipelineY - 20,
-        width: GENERATOR_SIZE.width,
-        height: GENERATOR_SIZE.height,
-        data: {
-          title: `Image Generator #${number}`,
-          promptNodeId: assistantId,
-          sourceNodeId: sourceImage?.id ?? null,
-          referenceNodeIds: [],
-          preserveMode: "STRICT",
-          preserveEverythingElse: true,
-          status: "DRAFT",
-          progressMessage: null,
-          errorMessage: null,
-          outputAsset: null,
-        } satisfies GeneratorNodeData,
-      },
-    ]);
+    const clonedSourceAsset =
+      sourceImage?.kind === "IMAGE_GENERATOR"
+        ? (sourceImage.data as GeneratorNodeData).outputAsset ?? null
+        : sourceImage?.kind === "IMAGE"
+          ? (sourceImage.data as ImageNodeData).asset ?? null
+          : null;
+
+    const cloneGeneratedSource = Boolean(preferredSourceNodeId && preferredSource?.kind === "IMAGE_GENERATOR" && clonedSourceAsset);
+    const sourceNodeIdForGenerator = cloneGeneratedSource ? sourceCloneId : sourceImage?.id ?? null;
+
+    setNodes((current) => {
+      const nextNodes: CanvasNode[] = [...current];
+
+      if (cloneGeneratedSource && clonedSourceAsset) {
+        const sourcePosition = findFreeNodePosition(pipelineX - IMAGE_SIZE.width - 85, pipelineY + 120, IMAGE_SIZE.width, IMAGE_SIZE.height);
+        nextNodes.push(
+          makeImageNode({
+            id: sourceCloneId,
+            x: sourcePosition.x,
+            y: sourcePosition.y,
+            title: imageTitle(nextSourceCount, "SOURCE"),
+            asset: clonedSourceAsset,
+            role: "SOURCE",
+          }),
+        );
+      }
+
+      nextNodes.push(
+        {
+          id: textId,
+          kind: "TEXT",
+          x: pipelineX,
+          y: pipelineY,
+          width: TEXT_SIZE.width,
+          height: TEXT_SIZE.height,
+          data: { title: `Text #${number}`, text: "" } satisfies TextNodeData,
+        },
+        {
+          id: assistantId,
+          kind: "ASSISTANT",
+          x: pipelineX + 510,
+          y: pipelineY - 10,
+          width: ASSISTANT_SIZE.width,
+          height: ASSISTANT_SIZE.height,
+          data: {
+            title: `Assistant #${number}`,
+            textNodeId: textId,
+            outputText: "",
+            state: "IDLE",
+            errorMessage: null,
+            includeReferences: false,
+          } satisfies AssistantNodeData,
+        },
+        {
+          id: generatorId,
+          kind: "IMAGE_GENERATOR",
+          x: pipelineX + 975,
+          y: pipelineY - 20,
+          width: GENERATOR_SIZE.width,
+          height: GENERATOR_SIZE.height,
+          data: {
+            title: `Image Generator #${number}`,
+            promptNodeId: assistantId,
+            sourceNodeId: sourceNodeIdForGenerator,
+            referenceNodeIds: [],
+            preserveMode: "STRICT",
+            preserveEverythingElse: true,
+            status: "DRAFT",
+            progressMessage: null,
+            errorMessage: null,
+            outputAsset: null,
+          } satisfies GeneratorNodeData,
+        },
+      );
+
+      return nextNodes;
+    });
 
     setSelectedNodeId(textId);
     setAddMenu(null);
@@ -1393,7 +1885,12 @@ export function RenderFlowEditor({ projectId, sessionId }: RenderFlowEditorProps
     const { worldX, worldY, pending } = addMenu;
 
     if (kind === "PIPELINE") {
-      createPipeline(worldX, worldY);
+      const source = pending ? nodeById.get(pending.fromNodeId) : null;
+      const preferredSourceNodeId =
+        pending?.outputType === "IMAGE" && (source?.kind === "IMAGE" || source?.kind === "IMAGE_GENERATOR")
+          ? source.id
+          : null;
+      createPipeline(worldX, worldY, preferredSourceNodeId);
       setPendingConnection(null);
       return;
     }
@@ -1673,6 +2170,55 @@ export function RenderFlowEditor({ projectId, sessionId }: RenderFlowEditorProps
       return;
     }
 
+    const existingGeneration = generator.generationId ? generationById.get(generator.generationId) : null;
+    const canRetryExisting = Boolean(
+      existingGeneration &&
+        (existingGeneration.status === "FAILED" || existingGeneration.status === "CANCELED") &&
+        !existingGeneration.outputAsset &&
+        existingGeneration.sourceAssetId === sourceAsset.id &&
+        existingGeneration.userInstruction.trim() === instruction &&
+        existingGeneration.refinedPrompt?.trim() === assistant.outputText.trim() &&
+        existingGeneration.preserveMode === generator.preserveMode &&
+        existingGeneration.preserveEverythingElse === generator.preserveEverythingElse,
+    );
+
+    if (canRetryExisting && existingGeneration) {
+      setError(null);
+      updateNode<GeneratorNodeData>(node.id, (data) => ({
+        ...data,
+        status: "GENERATING",
+        progressMessage: "Retrying Gemini...",
+        errorMessage: null,
+        outputAsset: null,
+      }));
+
+      try {
+        const result = await retryGeneration.mutateAsync(existingGeneration.id);
+        addBackgroundGeneration(result.id);
+        updateNode<GeneratorNodeData>(node.id, (data) => ({
+          ...data,
+          generationId: result.id,
+          status: result.status,
+          progressMessage: result.progressMessage,
+          errorMessage: result.errorMessage,
+          outputAsset: null,
+        }));
+        setToast("Gemini generation retry started");
+        await flowQuery.refetch();
+        return;
+      } catch (retryError) {
+        const message = retryError instanceof Error ? retryError.message : "Could not retry Gemini.";
+        updateNode<GeneratorNodeData>(node.id, (data) => ({
+          ...data,
+          status: "FAILED",
+          errorMessage: message,
+          progressMessage: null,
+        }));
+        setError(message);
+        return;
+      }
+    }
+
     setError(null);
     updateNode<GeneratorNodeData>(node.id, (data) => ({
       ...data,
@@ -1819,11 +2365,16 @@ export function RenderFlowEditor({ projectId, sessionId }: RenderFlowEditorProps
       setHiddenGenerationIds((current) => [...new Set([...current, ...fullyRemovedGenerationIds])]);
     }
 
-    const removedHistoryNodeIds = nodesToRemove
-      .filter((node) => Boolean(getNodeGenerationId(node)))
+    const removedPersistentNodeIds = nodesToRemove
+      .filter((node) => {
+        if (getNodeGenerationId(node)) return true;
+        if (node.kind !== "IMAGE") return false;
+        const image = node.data as ImageNodeData;
+        return Boolean(image.asset || image.remoteFilePath || image.referenceImageId);
+      })
       .map((node) => node.id);
-    if (removedHistoryNodeIds.length > 0) {
-      setHiddenNodeIds((current) => [...new Set([...current, ...removedHistoryNodeIds])]);
+    if (removedPersistentNodeIds.length > 0) {
+      setHiddenNodeIds((current) => [...new Set([...current, ...removedPersistentNodeIds])]);
     }
 
     setNodes((current) =>
@@ -1861,106 +2412,29 @@ export function RenderFlowEditor({ projectId, sessionId }: RenderFlowEditorProps
     removeNodes([node.id]);
   }
 
-  function nodeHasConnections(nodeId: string) {
-    const ownNode = nodeById.get(nodeId);
-    if (!ownNode) return false;
-
-    if (ownNode.kind === "ASSISTANT" && Boolean((ownNode.data as AssistantNodeData).textNodeId)) {
-      return true;
+  function unlinkEdge(edge: CanvasEdge) {
+    if (edge.target === "ASSISTANT_TEXT") {
+      updateNode<AssistantNodeData>(edge.toId, (data) => ({
+        ...data,
+        textNodeId: null,
+        outputText: "",
+        state: "IDLE",
+        errorMessage: null,
+      }));
+    } else if (edge.target === "GENERATOR_PROMPT") {
+      updateNode<GeneratorNodeData>(edge.toId, (data) => ({ ...data, promptNodeId: null }));
+    } else if (edge.target === "GENERATOR_SOURCE") {
+      updateNode<GeneratorNodeData>(edge.toId, (data) => ({ ...data, sourceNodeId: null }));
+    } else {
+      updateNode<GeneratorNodeData>(edge.toId, (data) => ({
+        ...data,
+        referenceNodeIds: data.referenceNodeIds.filter((referenceNodeId) => referenceNodeId !== edge.fromId),
+      }));
     }
-
-    if (ownNode.kind === "IMAGE_GENERATOR") {
-      const generator = ownNode.data as GeneratorNodeData;
-      if (generator.promptNodeId || generator.sourceNodeId || generator.referenceNodeIds.length > 0) {
-        return true;
-      }
-    }
-
-    for (const candidate of nodes) {
-      if (candidate.kind === "ASSISTANT") {
-        if ((candidate.data as AssistantNodeData).textNodeId === nodeId) return true;
-      }
-
-      if (candidate.kind === "IMAGE_GENERATOR") {
-        const generator = candidate.data as GeneratorNodeData;
-        if (
-          generator.promptNodeId === nodeId ||
-          generator.sourceNodeId === nodeId ||
-          generator.referenceNodeIds.includes(nodeId)
-        ) {
-          return true;
-        }
-      }
-    }
-
-    return false;
-  }
-
-  function unlinkNodeConnections(targetNodeIds: string[]) {
-    const ids = new Set(targetNodeIds);
-    if (ids.size === 0) return;
-
-    setNodes((current) =>
-      current.map((node) => {
-        if (node.kind === "ASSISTANT") {
-          const data = node.data as AssistantNodeData;
-          const clearOwnInput = ids.has(node.id);
-          const clearLinkedInput = data.textNodeId ? ids.has(data.textNodeId) : false;
-
-          if (!clearOwnInput && !clearLinkedInput) return node;
-
-          return {
-            ...node,
-            data: {
-              ...data,
-              textNodeId: null,
-              state: data.outputText.trim() ? "READY" : "IDLE",
-              errorMessage: null,
-            },
-          };
-        }
-
-        if (node.kind === "IMAGE_GENERATOR") {
-          const data = node.data as GeneratorNodeData;
-          const clearOwnInputs = ids.has(node.id);
-          const nextPromptNodeId =
-            clearOwnInputs || (data.promptNodeId ? ids.has(data.promptNodeId) : false)
-              ? null
-              : data.promptNodeId;
-          const nextSourceNodeId =
-            clearOwnInputs || (data.sourceNodeId ? ids.has(data.sourceNodeId) : false)
-              ? null
-              : data.sourceNodeId;
-          const nextReferenceNodeIds = clearOwnInputs
-            ? []
-            : data.referenceNodeIds.filter((referenceNodeId) => !ids.has(referenceNodeId));
-
-          if (
-            nextPromptNodeId === data.promptNodeId &&
-            nextSourceNodeId === data.sourceNodeId &&
-            nextReferenceNodeIds.length === data.referenceNodeIds.length
-          ) {
-            return node;
-          }
-
-          return {
-            ...node,
-            data: {
-              ...data,
-              promptNodeId: nextPromptNodeId,
-              sourceNodeId: nextSourceNodeId,
-              referenceNodeIds: nextReferenceNodeIds,
-              errorMessage: null,
-            },
-          };
-        }
-
-        return node;
-      }),
-    );
 
     setPendingConnection(null);
-    setToast(ids.size === 1 ? "Connection removed" : "Connections removed");
+    setAddMenu(null);
+    setToast("Connection removed");
   }
 
   function renderActionBar(node: CanvasNode) {
@@ -1976,10 +2450,6 @@ export function RenderFlowEditor({ projectId, sessionId }: RenderFlowEditorProps
         node.kind === "ASSISTANT" ||
         node.kind === "IMAGE" ||
         (node.kind === "IMAGE_GENERATOR" && Boolean((node.data as GeneratorNodeData).outputAsset)));
-    const canUnlink = multipleSelected
-      ? selectedNodeIds.some((nodeId) => nodeHasConnections(nodeId))
-      : nodeHasConnections(node.id);
-
     return (
       <div
         className="absolute left-1/2 top-[-58px] z-30 flex -translate-x-1/2 items-center rounded-[11px] border border-white/[0.1] bg-[#1a1a1c]/98 p-1 shadow-[0_12px_30px_rgba(0,0,0,0.4)] backdrop-blur"
@@ -2015,20 +2485,6 @@ export function RenderFlowEditor({ projectId, sessionId }: RenderFlowEditorProps
             title="Connect output"
           >
             <Link2 size={16} />
-          </button>
-        )}
-
-        {canUnlink && (
-          <button
-            type="button"
-            onClick={(event) => {
-              event.stopPropagation();
-              unlinkNodeConnections(multipleSelected ? selectedNodeIds : [node.id]);
-            }}
-            className="flex h-9 w-10 items-center justify-center rounded-lg text-white/75 hover:bg-white/[0.08] hover:text-white"
-            title={multipleSelected ? "Unlink selected nodes" : "Unlink node"}
-          >
-            <X size={15} />
           </button>
         )}
 
@@ -2070,24 +2526,47 @@ export function RenderFlowEditor({ projectId, sessionId }: RenderFlowEditorProps
     label: string;
     onClick: (event: ReactMouseEvent) => void;
     keyValue?: string;
+    miniLabel?: string;
+    miniLabelTone?: "source" | "reference" | "neutral";
   }) {
-    const { node, side, top, type, label, onClick, keyValue } = input;
+    const { node, side, top, type, label, onClick, keyValue, miniLabel, miniLabelTone = "neutral" } = input;
+    const miniLabelClass =
+      miniLabelTone === "source"
+        ? "border-emerald-400/20 bg-emerald-400/12 text-emerald-200/95"
+        : miniLabelTone === "reference"
+          ? "border-sky-400/20 bg-sky-400/12 text-sky-200/95"
+          : "border-white/[0.08] bg-white/[0.06] text-white/72";
+
     return (
-      <button
-        key={keyValue}
-        type="button"
-        title={label}
-        aria-label={label}
-        onClick={onClick}
-        className={[
-          "absolute z-20 flex h-[34px] w-[34px] items-center justify-center rounded-full border border-white/[0.1] bg-[#252527] text-[13px] text-white/75 shadow-[0_7px_18px_rgba(0,0,0,0.35)] transition",
-          side === "LEFT" ? "-left-[43px]" : "-right-[43px]",
-          pendingConnection ? "hover:border-[#9e77ff] hover:bg-[#302740]" : "hover:bg-[#303033]",
-        ].join(" ")}
-        style={{ top }}
-      >
-        {type === "TEXT" ? <Type size={14} /> : <FileImage size={14} />}
-      </button>
+      <>
+        <button
+          key={keyValue}
+          type="button"
+          title={label}
+          aria-label={label}
+          onClick={onClick}
+          className={[
+            "absolute z-20 flex h-[34px] w-[34px] items-center justify-center rounded-full border border-white/[0.1] bg-[#252527] text-[13px] text-white/75 shadow-[0_7px_18px_rgba(0,0,0,0.35)] transition",
+            side === "LEFT" ? "-left-[43px]" : "-right-[43px]",
+            pendingConnection ? "hover:border-[#9e77ff] hover:bg-[#302740]" : "hover:bg-[#303033]",
+          ].join(" ")}
+          style={{ top }}
+        >
+          {type === "TEXT" ? <Type size={14} /> : <FileImage size={14} />}
+        </button>
+        {miniLabel ? (
+          <div
+            className={[
+              "pointer-events-none absolute z-10 flex h-5 items-center rounded-md border px-1.5 text-[10px] font-semibold uppercase tracking-[0.08em] shadow-[0_6px_18px_rgba(0,0,0,0.2)]",
+              miniLabelClass,
+              side === "LEFT" ? "left-1" : "right-1",
+            ].join(" ")}
+            style={{ top: top + 7 }}
+          >
+            {miniLabel}
+          </div>
+        ) : null}
+      </>
     );
   }
 
@@ -2100,6 +2579,7 @@ export function RenderFlowEditor({ projectId, sessionId }: RenderFlowEditorProps
         style={{ left: node.x, top: node.y, width: node.width, height: node.height }}
         onClick={(event) => {
           event.stopPropagation();
+
           if (!selected) setSelectedNodeIds([node.id]);
           setAddMenu(null);
         }}
@@ -2614,6 +3094,8 @@ export function RenderFlowEditor({ projectId, sessionId }: RenderFlowEditorProps
           top: 108,
           type: "IMAGE",
           label: "Source image input",
+          miniLabel: "SRC",
+          miniLabelTone: "source",
           onClick: (event) => {
             event.stopPropagation();
             connectGeneratorInput(node.id, "SOURCE");
@@ -2625,6 +3107,8 @@ export function RenderFlowEditor({ projectId, sessionId }: RenderFlowEditorProps
           top: 158,
           type: "IMAGE",
           label: `Reference input (${referenceCount}/5)`,
+          miniLabel: "REF",
+          miniLabelTone: "reference",
           onClick: (event) => {
             event.stopPropagation();
             connectGeneratorInput(node.id, "REFERENCE");
@@ -2809,15 +3293,39 @@ export function RenderFlowEditor({ projectId, sessionId }: RenderFlowEditorProps
 
               const imageEdge = edge.target === "GENERATOR_SOURCE" || edge.target === "GENERATOR_REFERENCE";
 
+              const path = curvePath(start.x, start.y, end.x, end.y);
+
               return (
-                <path
-                  key={edge.id}
-                  d={curvePath(start.x, start.y, end.x, end.y)}
-                  fill="none"
-                  stroke={imageEdge ? "rgba(125,111,173,.72)" : "rgba(151,103,255,.82)"}
-                  strokeWidth={2.3}
-                  strokeLinecap="round"
-                />
+                <g key={edge.id}>
+                  <path
+                    d={path}
+                    fill="none"
+                    stroke={imageEdge ? "rgba(125,111,173,.72)" : "rgba(151,103,255,.82)"}
+                    strokeWidth={2.3}
+                    strokeLinecap="round"
+                    pointerEvents="none"
+                  />
+                  <path
+                    d={path}
+                    fill="none"
+                    stroke="rgba(255,255,255,0.001)"
+                    strokeWidth={16}
+                    strokeLinecap="round"
+                    pointerEvents="stroke"
+                    className="pointer-events-auto cursor-pointer"
+                    onPointerDown={(event) => {
+                      event.preventDefault();
+                      event.stopPropagation();
+                    }}
+                    onClick={(event) => {
+                      event.preventDefault();
+                      event.stopPropagation();
+                      unlinkEdge(edge);
+                    }}
+                  >
+                    <title>Click to unlink this connection</title>
+                  </path>
+                </g>
               );
             })}
 
@@ -2832,6 +3340,22 @@ export function RenderFlowEditor({ projectId, sessionId }: RenderFlowEditorProps
               />
             )}
           </svg>
+
+          {selectedGroupBounds && !selectionDrag && (
+            <div
+              className="pointer-events-none absolute z-[9] rounded-[18px] border border-[#5f9dff]/70 bg-[#4b94ff]/[0.025] shadow-[0_0_0_1px_rgba(75,148,255,0.08)]"
+              style={{
+                left: selectedGroupBounds.left,
+                top: selectedGroupBounds.top,
+                width: selectedGroupBounds.width,
+                height: selectedGroupBounds.height,
+              }}
+            >
+              <div className="absolute -top-7 left-0 rounded-md border border-[#5f9dff]/30 bg-[#141b27]/95 px-2 py-1 text-[11px] font-medium text-[#a8c8ff] shadow-lg">
+                {selectedNodeIds.length} selected · drag anywhere inside
+              </div>
+            </div>
+          )}
 
           {selectionDrag && (
             <div
@@ -2872,6 +3396,25 @@ export function RenderFlowEditor({ projectId, sessionId }: RenderFlowEditorProps
             title="Pan"
           >
             <Hand size={16} />
+          </button>
+          <span className="my-1 h-px w-6 bg-white/[0.07]" />
+          <button
+            type="button"
+            onClick={undoFlow}
+            disabled={!canUndo}
+            className="flex h-9 w-9 items-center justify-center rounded-[10px] text-white/58 hover:bg-white/[0.06] hover:text-white disabled:cursor-not-allowed disabled:opacity-20"
+            title="Undo (Ctrl+Z)"
+          >
+            <Undo2 size={15} />
+          </button>
+          <button
+            type="button"
+            onClick={redoFlow}
+            disabled={!canRedo}
+            className="flex h-9 w-9 items-center justify-center rounded-[10px] text-white/58 hover:bg-white/[0.06] hover:text-white disabled:cursor-not-allowed disabled:opacity-20"
+            title="Redo (Ctrl+Shift+Z / Ctrl+Y)"
+          >
+            <Redo2 size={15} />
           </button>
           <span className="my-1 h-px w-6 bg-white/[0.07]" />
           <button
@@ -2956,7 +3499,7 @@ export function RenderFlowEditor({ projectId, sessionId }: RenderFlowEditorProps
                 </>
               )}
 
-              {(!addMenu.pending || addMenu.pending.outputType === "IMAGE") && (
+              {addMenu.pending?.outputType === "IMAGE" && (
                 <button onClick={() => addFromMenu("IMAGE_GENERATOR")} className="flex w-full items-center gap-3 rounded-lg px-3 py-2.5 text-left text-[13px] text-white/82 hover:bg-white/[0.06]">
                   <span className="flex h-7 w-7 items-center justify-center rounded-md bg-emerald-400/10 text-emerald-300"><FileImage size={14} /></span>
                   Image Generator (use as source)
