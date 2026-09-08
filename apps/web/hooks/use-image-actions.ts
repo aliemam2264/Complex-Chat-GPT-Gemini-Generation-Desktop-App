@@ -4,11 +4,16 @@ import { useEffect, useRef, useState } from "react";
 
 type ImageActionStatus = "idle" | "saving" | "copying";
 
+type PreparedImageDrag = {
+  filePath: string;
+  iconPath?: string | null;
+};
+
 export function useImageActions() {
   const [status, setStatus] = useState<ImageActionStatus>("idle");
 
   const [message, setMessage] = useState<string | null>(null);
-  const preparedDragIds = useRef(new Map<string, string>());
+  const preparedDragFiles = useRef(new Map<string, PreparedImageDrag>());
   const preparingDragKeys = useRef(new Set<string>());
 
   useEffect(() => {
@@ -73,12 +78,12 @@ export function useImageActions() {
     }
   }
 
-
   async function prepareImageDrag(imageUrl: string, fileName: string) {
     const key = `${imageUrl}::${fileName}`;
+    const existing = preparedDragFiles.current.get(key);
 
-    if (preparedDragIds.current.has(key) || preparingDragKeys.current.has(key)) {
-      return preparedDragIds.current.get(key) ?? null;
+    if (existing || preparingDragKeys.current.has(key)) {
+      return existing ?? null;
     }
 
     if (!window.eskanderStudio?.desktop) {
@@ -90,9 +95,14 @@ export function useImageActions() {
     try {
       const result = await window.eskanderStudio.prepareImageDrag(imageUrl, fileName);
 
-      if (result.success && result.dragId) {
-        preparedDragIds.current.set(key, result.dragId);
-        return result.dragId;
+      if (result.success && result.filePath) {
+        const prepared: PreparedImageDrag = {
+          filePath: result.filePath,
+          iconPath: result.iconPath ?? null,
+        };
+
+        preparedDragFiles.current.set(key, prepared);
+        return prepared;
       }
     } catch (error) {
       console.error("Prepare image drag failed:", error);
@@ -105,15 +115,15 @@ export function useImageActions() {
 
   function startImageDrag(imageUrl: string, fileName: string) {
     const key = `${imageUrl}::${fileName}`;
-    const dragId = preparedDragIds.current.get(key);
+    const prepared = preparedDragFiles.current.get(key);
 
-    if (!dragId || !window.eskanderStudio?.desktop) {
+    if (!prepared || !window.eskanderStudio?.desktop) {
       void prepareImageDrag(imageUrl, fileName);
       setMessage("Preparing image for drag. Try again in a moment.");
       return false;
     }
 
-    window.eskanderStudio.startImageDrag(dragId);
+    window.eskanderStudio.startImageDrag(prepared.filePath, prepared.iconPath ?? null);
     return true;
   }
 

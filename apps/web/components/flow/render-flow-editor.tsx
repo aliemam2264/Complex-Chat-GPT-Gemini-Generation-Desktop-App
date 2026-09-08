@@ -217,6 +217,51 @@ type RenderFlowEditorProps = {
   sessionId: string;
 };
 
+type WorkflowTransferNode = {
+  id: string;
+  kind: NodeKind;
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+  data:
+    | {
+        type: "TEXT";
+        title: string;
+        text: string;
+      }
+    | {
+        type: "ASSISTANT";
+        title: string;
+        textNodeId: string | null;
+        includeReferences: boolean;
+      }
+    | {
+        type: "IMAGE_GENERATOR";
+        title: string;
+        promptNodeId: string | null;
+        sourceNodeId: string | null;
+        referenceNodeIds: string[];
+        preserveMode: PreserveMode;
+        preserveEverythingElse: boolean;
+      }
+    | {
+        type: "IMAGE";
+        title: string;
+        role: ImageNodeData["role"];
+      };
+};
+
+type WorkflowTransferPayload = {
+  kind: string;
+  version: number;
+  exportedAt: string;
+  name: string;
+  originProjectId: string;
+  originSessionId: string;
+  nodes: WorkflowTransferNode[];
+};
+
 const ACTIVE_STATUSES = new Set(["PENDING", "PROMPTING", "PROMPT_READY", "GENERATING", "DOWNLOADING"]);
 const WORLD_WIDTH = 5200;
 const WORLD_HEIGHT = 3600;
@@ -230,6 +275,9 @@ const AUTO_LAYOUT_MARGIN = 44;
 const AUTO_LAYOUT_ROW_GAP = 110;
 const AUTO_LAYOUT_COLUMN_GAP = 120;
 const IMAGE_SIZE = { width: 245, height: 205 };
+const WORKFLOW_CLIPBOARD_KEY = "eskander-flow-workflow-clipboard";
+const WORKFLOW_FILE_KIND = "eskander-flow-workflow";
+const WORKFLOW_FILE_VERSION = 2;
 
 function clamp(value: number, min: number, max: number) {
   return Math.min(max, Math.max(min, value));
@@ -257,6 +305,32 @@ function getGeneratorInputPoint(node: CanvasNode, input: GeneratorInput, referen
 
 function getAssistantInputPoint(node: CanvasNode) {
   return { x: node.x, y: node.y + 72 };
+}
+
+function computeNodeBounds(nodes: Array<Pick<CanvasNode, "x" | "y" | "width" | "height">>) {
+  if (nodes.length === 0) {
+    return { left: 0, top: 0, right: 0, bottom: 0, width: 0, height: 0 };
+  }
+
+  const left = Math.min(...nodes.map((node) => node.x));
+  const top = Math.min(...nodes.map((node) => node.y));
+  const right = Math.max(...nodes.map((node) => node.x + node.width));
+  const bottom = Math.max(...nodes.map((node) => node.y + node.height));
+
+  return {
+    left,
+    top,
+    right,
+    bottom,
+    width: right - left,
+    height: bottom - top,
+  };
+}
+
+function sleep(ms: number) {
+  return new Promise<void>((resolve) => {
+    window.setTimeout(resolve, ms);
+  });
 }
 
 function imageTitle(index: number, role: ImageNodeData["role"]) {
@@ -406,7 +480,6 @@ function serializeDraftNode(node: CanvasNode): CanvasNode | null {
   if (node.kind !== "IMAGE") return node;
 
   const image = node.data as ImageNodeData;
-  if (!image.asset && !image.remoteFilePath) return null;
 
   return {
     ...node,
@@ -463,8 +536,9 @@ function dedupeFlowImageNodes(nodes: CanvasNode[]) {
     }
 
     const image = node.data as ImageNodeData;
-    const sourceAssetId = image.role === "SOURCE" ? image.asset?.id : undefined;
-    const referenceIdentity = getReferenceIdentity(image);
+    const generationId = getNodeGenerationId(node);
+    const sourceAssetId = image.role === "SOURCE" && generationId ? image.asset?.id : undefined;
+    const referenceIdentity = generationId ? getReferenceIdentity(image) : null;
 
     if (sourceAssetId) {
       const existingNodeId = sourceNodeByAssetId.get(sourceAssetId);
@@ -751,6 +825,10 @@ export function RenderFlowEditor({ projectId, sessionId }: RenderFlowEditorProps
 
   const viewportRef = useRef<HTMLDivElement>(null);
   const referenceInputRef = useRef<HTMLInputElement>(null);
+  const workflowImportInputRef = useRef<HTMLInputElement>(null);
+  const replaceImageInputRef = useRef<HTMLInputElement>(null);
+  const replaceImageTargetNodeIdRef = useRef<string | null>(null);
+  const nodesRef = useRef<CanvasNode[]>([]);
   const initializedRef = useRef(false);
   const referenceDropPointRef = useRef({ x: 360, y: 720 });
   const referenceTargetGeneratorRef = useRef<string | null>(null);
@@ -786,6 +864,7 @@ export function RenderFlowEditor({ projectId, sessionId }: RenderFlowEditorProps
   const [toast, setToast] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [historyVersion, setHistoryVersion] = useState(0);
+  const [workflowBusyLabel, setWorkflowBusyLabel] = useState<string | null>(null);
 
   const flowQuery = useQuery({
     queryKey: ["render-flow", projectId, sessionId],
@@ -803,6 +882,10 @@ export function RenderFlowEditor({ projectId, sessionId }: RenderFlowEditorProps
     [flowData],
   );
   const nodeById = useMemo(() => new Map(nodes.map((node) => [node.id, node])), [nodes]);
+
+  useEffect(() => {
+    nodesRef.current = nodes;
+  }, [nodes]);
 
   const selectedGroupBounds = useMemo(() => {
     if (selectedNodeIds.length < 2) return null;
@@ -1249,6 +1332,24 @@ export function RenderFlowEditor({ projectId, sessionId }: RenderFlowEditorProps
         return;
       }
 
+      if (commandKey && !event.altKey && !event.shiftKey && !isEditing && lowerKey === "c") {
+        event.preventDefault();
+        void copyWorkflowToClipboard();
+        return;
+      }
+
+      if (commandKey && !event.altKey && !event.shiftKey && !isEditing && lowerKey === "v") {
+        event.preventDefault();
+        void pasteWorkflowFromClipboard();
+        return;
+      }
+
+      if (commandKey && !event.altKey && !event.shiftKey && !isEditing && lowerKey === "r") {
+        event.preventDefault();
+        void runSelectedWorkflow();
+        return;
+      }
+
       if (event.key === "Escape") {
         setPendingConnection(null);
         setAddMenu(null);
@@ -1348,6 +1449,682 @@ export function RenderFlowEditor({ projectId, sessionId }: RenderFlowEditorProps
 
     return result;
   }, [nodes]);
+
+  function getWorkflowNodeIdsFromSelectionOrAll() {
+    if (selectedNodeIds.length === 0) {
+      return nodes.map((node) => node.id);
+    }
+
+    const adjacency = new Map<string, Set<string>>();
+    nodes.forEach((node) => adjacency.set(node.id, new Set<string>()));
+
+    edges.forEach((edge) => {
+      adjacency.get(edge.fromId)?.add(edge.toId);
+      adjacency.get(edge.toId)?.add(edge.fromId);
+    });
+
+    const queue = [...selectedNodeIds.filter((nodeId) => nodeById.has(nodeId))];
+    const visited = new Set<string>();
+
+    while (queue.length > 0) {
+      const nodeId = queue.shift();
+      if (!nodeId || visited.has(nodeId)) continue;
+      visited.add(nodeId);
+      const neighbors = adjacency.get(nodeId);
+      if (!neighbors) continue;
+      neighbors.forEach((neighborId) => {
+        if (!visited.has(neighborId)) queue.push(neighborId);
+      });
+    }
+
+    return visited.size > 0 ? nodes.filter((node) => visited.has(node.id)).map((node) => node.id) : nodes.map((node) => node.id);
+  }
+
+  async function createWorkflowPayload(nodeIds: string[]) {
+    if (!flowData) {
+      throw new Error("Flow data is not ready yet.");
+    }
+
+    const workflowSet = new Set(nodeIds);
+    const workflowNodes = nodes.filter((node) => workflowSet.has(node.id));
+
+    if (workflowNodes.length === 0) {
+      throw new Error("Select a workflow first.");
+    }
+
+    // Copy/export stores only the reusable workflow recipe. Previous generated
+    // images, generation ids and refined prompts are execution history and are
+    // intentionally excluded. If a selected source image is merely a snapshot
+    // of another selected generator output, collapse it back into a direct
+    // generator -> generator dependency.
+    const generatorByOutputAssetId = new Map<string, string>();
+    workflowNodes.forEach((node) => {
+      if (node.kind !== "IMAGE_GENERATOR") return;
+      const outputAsset = (node.data as GeneratorNodeData).outputAsset;
+      if (outputAsset?.id) generatorByOutputAssetId.set(outputAsset.id, node.id);
+    });
+
+    const imageAliasToGenerator = new Map<string, string>();
+    workflowNodes.forEach((node) => {
+      if (node.kind !== "IMAGE") return;
+      const image = node.data as ImageNodeData;
+      if (image.asset?.type !== "GENERATED") return;
+      const generatorNodeId = generatorByOutputAssetId.get(image.asset.id);
+      if (generatorNodeId) imageAliasToGenerator.set(node.id, generatorNodeId);
+    });
+
+    const transferNodes = workflowNodes.filter((node) => !imageAliasToGenerator.has(node.id));
+    const remapDependencyId = (nodeId: string | null) => {
+      if (!nodeId) return null;
+      return imageAliasToGenerator.get(nodeId) ?? nodeId;
+    };
+
+    const exportedNodes = transferNodes.map((node) => {
+      if (node.kind === "TEXT") {
+        const data = node.data as TextNodeData;
+        return {
+          id: node.id,
+          kind: node.kind,
+          x: node.x,
+          y: node.y,
+          width: node.width,
+          height: node.height,
+          data: {
+            type: "TEXT",
+            title: data.title,
+            text: data.text,
+          },
+        } satisfies WorkflowTransferNode;
+      }
+
+      if (node.kind === "ASSISTANT") {
+        const data = node.data as AssistantNodeData;
+        return {
+          id: node.id,
+          kind: node.kind,
+          x: node.x,
+          y: node.y,
+          width: node.width,
+          height: node.height,
+          data: {
+            type: "ASSISTANT",
+            title: data.title,
+            textNodeId: data.textNodeId,
+            includeReferences: data.includeReferences,
+          },
+        } satisfies WorkflowTransferNode;
+      }
+
+      if (node.kind === "IMAGE_GENERATOR") {
+        const data = node.data as GeneratorNodeData;
+        return {
+          id: node.id,
+          kind: node.kind,
+          x: node.x,
+          y: node.y,
+          width: node.width,
+          height: node.height,
+          data: {
+            type: "IMAGE_GENERATOR",
+            title: data.title,
+            promptNodeId: data.promptNodeId,
+            sourceNodeId: remapDependencyId(data.sourceNodeId),
+            referenceNodeIds: [
+              ...new Set(
+                data.referenceNodeIds
+                  .map((referenceNodeId) => remapDependencyId(referenceNodeId))
+                  .filter((referenceNodeId): referenceNodeId is string => Boolean(referenceNodeId)),
+              ),
+            ].slice(0, 5),
+            preserveMode: data.preserveMode,
+            preserveEverythingElse: data.preserveEverythingElse,
+          },
+        } satisfies WorkflowTransferNode;
+      }
+
+      const data = node.data as ImageNodeData;
+      return {
+        id: node.id,
+        kind: node.kind,
+        x: node.x,
+        y: node.y,
+        width: node.width,
+        height: node.height,
+        data: {
+          type: "IMAGE",
+          title: data.title,
+          role: data.role,
+        },
+      } satisfies WorkflowTransferNode;
+    });
+
+    return {
+      kind: WORKFLOW_FILE_KIND,
+      version: WORKFLOW_FILE_VERSION,
+      exportedAt: new Date().toISOString(),
+      name: flowData.session.name,
+      originProjectId: projectId,
+      originSessionId: sessionId,
+      nodes: exportedNodes,
+    } satisfies WorkflowTransferPayload;
+  }
+
+  async function copyWorkflowToClipboard() {
+    try {
+      setError(null);
+      setWorkflowBusyLabel("Copying workflow...");
+      const payload = await createWorkflowPayload(getWorkflowNodeIdsFromSelectionOrAll());
+      window.localStorage.setItem(WORKFLOW_CLIPBOARD_KEY, JSON.stringify(payload));
+      setToast("Workflow copied. Open any canvas and click Paste Flow.");
+    } catch (copyError) {
+      setError(copyError instanceof Error ? copyError.message : "Could not copy the workflow.");
+    } finally {
+      setWorkflowBusyLabel(null);
+    }
+  }
+
+  async function exportWorkflowToFile() {
+    try {
+      setError(null);
+      setWorkflowBusyLabel("Exporting workflow...");
+      const payload = await createWorkflowPayload(getWorkflowNodeIdsFromSelectionOrAll());
+      const fileStem = flowData?.session.name?.trim().replace(/[^a-z0-9-_]+/gi, "-").replace(/^-+|-+$/g, "") || "workflow";
+      const fileName = `${fileStem || "workflow"}-${new Date().toISOString().slice(0, 19).replace(/[:T]/g, "-")}.eskflow.json`;
+      const blob = new Blob([JSON.stringify(payload, null, 2)], { type: "application/json" });
+      const url = URL.createObjectURL(blob);
+      const link = document.createElement("a");
+      link.href = url;
+      link.download = fileName;
+      document.body.appendChild(link);
+      link.click();
+      link.remove();
+      URL.revokeObjectURL(url);
+      setToast("Workflow exported.");
+    } catch (exportError) {
+      setError(exportError instanceof Error ? exportError.message : "Could not export the workflow.");
+    } finally {
+      setWorkflowBusyLabel(null);
+    }
+  }
+
+  function findWorkflowPlacementOffset(
+    transferNodes: WorkflowTransferNode[],
+    mode: "CENTER" | "OFFSET",
+  ) {
+    const bounds = computeNodeBounds(
+      transferNodes.map((node) => ({ x: node.x, y: node.y, width: node.width, height: node.height })),
+    );
+    const margin = 54;
+    const gap = 90;
+    const existingNodes = nodesRef.current;
+
+    const minDx = margin - bounds.left;
+    const maxDx = WORLD_WIDTH - margin - bounds.right;
+    const minDy = margin - bounds.top;
+    const maxDy = WORLD_HEIGHT - margin - bounds.bottom;
+
+    const clampGroupOffset = (offset: { x: number; y: number }) => ({
+      x: minDx <= maxDx ? clamp(offset.x, minDx, maxDx) : minDx,
+      y: minDy <= maxDy ? clamp(offset.y, minDy, maxDy) : minDy,
+    });
+
+    const overlapsExisting = (offset: { x: number; y: number }) => {
+      const padding = 24;
+      return transferNodes.some((transferNode) => {
+        const left = transferNode.x + offset.x - padding;
+        const top = transferNode.y + offset.y - padding;
+        const right = transferNode.x + offset.x + transferNode.width + padding;
+        const bottom = transferNode.y + offset.y + transferNode.height + padding;
+
+        return existingNodes.some((existingNode) => {
+          const existingLeft = existingNode.x;
+          const existingTop = existingNode.y;
+          const existingRight = existingNode.x + existingNode.width;
+          const existingBottom = existingNode.y + existingNode.height;
+          return !(right <= existingLeft || left >= existingRight || bottom <= existingTop || top >= existingBottom);
+        });
+      });
+    };
+
+    const rect = viewportRef.current?.getBoundingClientRect();
+    const centerWorld = rect
+      ? screenToWorld(rect.left + rect.width / 2, rect.top + rect.height / 2)
+      : { x: bounds.left + bounds.width / 2, y: bounds.top + bounds.height / 2 };
+
+    const centerOffset = {
+      x: centerWorld.x - (bounds.left + bounds.width / 2),
+      y: centerWorld.y - (bounds.top + bounds.height / 2),
+    };
+
+    const candidates: Array<{ x: number; y: number }> = [];
+
+    if (mode === "OFFSET") {
+      candidates.push(
+        { x: bounds.width + gap, y: 0 },
+        { x: 0, y: bounds.height + gap },
+        { x: bounds.width + gap, y: bounds.height + gap },
+        { x: -(bounds.width + gap), y: 0 },
+        { x: 0, y: -(bounds.height + gap) },
+      );
+    }
+
+    candidates.push(centerOffset);
+
+    const stepX = Math.max(160, Math.min(420, bounds.width * 0.28));
+    const stepY = Math.max(140, Math.min(360, bounds.height * 0.28));
+    for (let radius = 1; radius <= 8; radius += 1) {
+      candidates.push(
+        { x: centerOffset.x + radius * stepX, y: centerOffset.y },
+        { x: centerOffset.x, y: centerOffset.y + radius * stepY },
+        { x: centerOffset.x - radius * stepX, y: centerOffset.y },
+        { x: centerOffset.x, y: centerOffset.y - radius * stepY },
+        { x: centerOffset.x + radius * stepX, y: centerOffset.y + radius * stepY },
+        { x: centerOffset.x - radius * stepX, y: centerOffset.y + radius * stepY },
+      );
+    }
+
+    const seen = new Set<string>();
+    for (const rawCandidate of candidates) {
+      const candidate = clampGroupOffset(rawCandidate);
+      const signature = `${Math.round(candidate.x)}:${Math.round(candidate.y)}`;
+      if (seen.has(signature)) continue;
+      seen.add(signature);
+      if (!overlapsExisting(candidate)) return candidate;
+    }
+
+    // Fall back to a viewport-centered group translation. The whole group is
+    // constrained as one rectangle, so relative node spacing is never warped.
+    return clampGroupOffset(centerOffset);
+  }
+
+  async function importWorkflowPayload(payload: WorkflowTransferPayload, mode: "CENTER" | "OFFSET" = "CENTER") {
+    if (!flowData) {
+      throw new Error("Flow data is not ready yet.");
+    }
+
+    if (payload.kind !== WORKFLOW_FILE_KIND || !Array.isArray(payload.nodes)) {
+      throw new Error("This file is not a valid Eskander workflow.");
+    }
+
+    if (payload.version !== 1 && payload.version !== WORKFLOW_FILE_VERSION) {
+      throw new Error("This workflow file format is not supported by this version of Eskander Plus Studio.");
+    }
+
+    const offset = findWorkflowPlacementOffset(payload.nodes, mode);
+    const idMap = new Map<string, string>();
+    payload.nodes.forEach((node) => {
+      idMap.set(node.id, `draft-${node.kind.toLowerCase()}-${crypto.randomUUID()}`);
+    });
+
+    const importedNodes: CanvasNode[] = [];
+
+    for (const node of payload.nodes) {
+      const nodeId = idMap.get(node.id)!;
+      const x = node.x + offset.x;
+      const y = node.y + offset.y;
+
+      if (node.kind === "TEXT" && node.data.type === "TEXT") {
+        importedNodes.push({
+          id: nodeId,
+          kind: "TEXT",
+          x,
+          y,
+          width: node.width,
+          height: node.height,
+          data: {
+            title: node.data.title,
+            text: node.data.text,
+          } satisfies TextNodeData,
+        });
+        continue;
+      }
+
+      if (node.kind === "ASSISTANT" && node.data.type === "ASSISTANT") {
+        importedNodes.push({
+          id: nodeId,
+          kind: "ASSISTANT",
+          x,
+          y,
+          width: node.width,
+          height: node.height,
+          data: {
+            title: node.data.title,
+            textNodeId: node.data.textNodeId ? idMap.get(node.data.textNodeId) ?? null : null,
+            outputText: "",
+            state: "IDLE",
+            errorMessage: null,
+            includeReferences: node.data.includeReferences,
+          } satisfies AssistantNodeData,
+        });
+        continue;
+      }
+
+      if (node.kind === "IMAGE_GENERATOR" && node.data.type === "IMAGE_GENERATOR") {
+        importedNodes.push({
+          id: nodeId,
+          kind: "IMAGE_GENERATOR",
+          x,
+          y,
+          width: node.width,
+          height: node.height,
+          data: {
+            title: node.data.title,
+            promptNodeId: node.data.promptNodeId ? idMap.get(node.data.promptNodeId) ?? null : null,
+            sourceNodeId: node.data.sourceNodeId ? idMap.get(node.data.sourceNodeId) ?? null : null,
+            referenceNodeIds: node.data.referenceNodeIds
+              .map((referenceNodeId) => idMap.get(referenceNodeId) ?? null)
+              .filter((referenceNodeId): referenceNodeId is string => Boolean(referenceNodeId))
+              .slice(0, 5),
+            preserveMode: node.data.preserveMode,
+            preserveEverythingElse: node.data.preserveEverythingElse,
+            status: "DRAFT",
+            progressMessage: null,
+            errorMessage: null,
+            outputAsset: null,
+          } satisfies GeneratorNodeData,
+        });
+        continue;
+      }
+
+      if (node.kind === "IMAGE" && node.data.type === "IMAGE") {
+        importedNodes.push(
+          makeImageNode({
+            id: nodeId,
+            x,
+            y,
+            title: node.data.title,
+            role: node.data.role,
+          }),
+        );
+      }
+    }
+
+    setNodes((current) => [...current, ...importedNodes]);
+    setSelectedNodeIds(importedNodes.map((node) => node.id));
+
+    return importedNodes.length;
+  }
+
+  async function pasteWorkflowFromClipboard() {
+    const raw = window.localStorage.getItem(WORKFLOW_CLIPBOARD_KEY);
+    if (!raw) {
+      setError("No workflow has been copied yet.");
+      return;
+    }
+
+    try {
+      setError(null);
+      setWorkflowBusyLabel("Pasting workflow...");
+      const payload = JSON.parse(raw) as WorkflowTransferPayload;
+      const count = await importWorkflowPayload(payload, payload.originProjectId === projectId && payload.originSessionId === sessionId ? "OFFSET" : "CENTER");
+      setToast(count === 1 ? "Workflow pasted." : `Workflow pasted with ${count} nodes.`);
+    } catch (pasteError) {
+      setError(pasteError instanceof Error ? pasteError.message : "Could not paste the workflow.");
+    } finally {
+      setWorkflowBusyLabel(null);
+    }
+  }
+
+  async function handleWorkflowImportFiles(files: FileList | null) {
+    const file = files?.[0];
+    if (!file) return;
+
+    try {
+      setError(null);
+      setWorkflowBusyLabel("Importing workflow...");
+      const payload = JSON.parse(await file.text()) as WorkflowTransferPayload;
+      const count = await importWorkflowPayload(payload, "CENTER");
+      setToast(count === 1 ? "Workflow imported." : `Workflow imported with ${count} nodes.`);
+    } catch (importError) {
+      setError(importError instanceof Error ? importError.message : "Could not import the workflow file.");
+    } finally {
+      setWorkflowBusyLabel(null);
+    }
+  }
+
+  function openReplaceImagePicker(nodeId: string) {
+    replaceImageTargetNodeIdRef.current = nodeId;
+    replaceImageInputRef.current?.click();
+  }
+
+  async function handleReplaceImageFile(files: FileList | null) {
+    const file = files?.[0];
+    const targetNodeId = replaceImageTargetNodeIdRef.current;
+    replaceImageTargetNodeIdRef.current = null;
+
+    if (!file || !targetNodeId) return;
+    if (!["image/png", "image/jpeg", "image/webp"].includes(file.type)) {
+      setError("Choose a PNG, JPG, or WEBP image.");
+      return;
+    }
+
+    try {
+      setError(null);
+      setWorkflowBusyLabel("Replacing image...");
+      const formData = new FormData();
+      formData.append("image", file);
+      const asset = await apiUpload<Asset>(`/api/projects/${projectId}/image-sessions/${sessionId}/flow/images`, formData);
+      setHiddenNodeIds((current) => [...new Set([...current, `flow-input-${asset.id}`])]);
+
+      setNodes((current) =>
+        current.map((node) => {
+          if (node.id !== targetNodeId || node.kind !== "IMAGE") return node;
+          const image = node.data as ImageNodeData;
+          return {
+            ...node,
+            data: {
+              ...image,
+              fileName: asset.fileName,
+              mimeType: asset.mimeType,
+              previewUrl: getAssetUrl(asset.filePath),
+              asset,
+              localFile: undefined,
+              remoteFilePath: undefined,
+              referenceImageId: undefined,
+            } satisfies ImageNodeData,
+          };
+        }),
+      );
+
+      await flowQuery.refetch();
+      setToast("Image replaced. Run Flow to execute the duplicated workflow on it.");
+    } catch (replaceError) {
+      setError(replaceError instanceof Error ? replaceError.message : "Could not replace the image.");
+    } finally {
+      setWorkflowBusyLabel(null);
+    }
+  }
+
+  function getWorkflowGeneratorOrder(workflowNodeIds: string[]) {
+    const workflowSet = new Set(workflowNodeIds);
+    const generators = nodes
+      .filter((node) => workflowSet.has(node.id) && node.kind === "IMAGE_GENERATOR")
+      .sort((left, right) => (left.x === right.x ? left.y - right.y : left.x - right.x));
+    const inDegree = new Map<string, number>();
+    const dependents = new Map<string, string[]>();
+
+    generators.forEach((generator) => {
+      inDegree.set(generator.id, 0);
+      dependents.set(generator.id, []);
+    });
+
+    generators.forEach((generator) => {
+      const data = generator.data as GeneratorNodeData;
+      const upstreamIds = [...new Set([data.sourceNodeId, ...data.referenceNodeIds].filter((nodeId): nodeId is string => Boolean(nodeId)))];
+      upstreamIds.forEach((nodeId) => {
+        if (!workflowSet.has(nodeId)) return;
+        const upstreamNode = nodeById.get(nodeId);
+        if (!upstreamNode || upstreamNode.kind !== "IMAGE_GENERATOR") return;
+        inDegree.set(generator.id, (inDegree.get(generator.id) ?? 0) + 1);
+        dependents.get(upstreamNode.id)?.push(generator.id);
+      });
+    });
+
+    const queue = generators.filter((generator) => (inDegree.get(generator.id) ?? 0) === 0);
+    const ordered: CanvasNode[] = [];
+
+    while (queue.length > 0) {
+      queue.sort((left, right) => (left.x === right.x ? left.y - right.y : left.x - right.x));
+      const current = queue.shift();
+      if (!current) break;
+      ordered.push(current);
+      dependents.get(current.id)?.forEach((downstreamId) => {
+        const nextInDegree = (inDegree.get(downstreamId) ?? 0) - 1;
+        inDegree.set(downstreamId, nextInDegree);
+        if (nextInDegree === 0) {
+          const candidate = nodeById.get(downstreamId);
+          if (candidate && candidate.kind === "IMAGE_GENERATOR") queue.push(candidate);
+        }
+      });
+    }
+
+    if (ordered.length !== generators.length) {
+      throw new Error("The selected workflow has a circular generator dependency.");
+    }
+
+    return ordered;
+  }
+
+  async function waitForGeneratorToFinish(generationId: string, nodeId: string) {
+    for (let attempt = 0; attempt < 600; attempt += 1) {
+      const liveNode = nodesRef.current.find((node) => node.id === nodeId);
+      if (!liveNode || liveNode.kind !== "IMAGE_GENERATOR") {
+        throw new Error("The workflow changed while it was running.");
+      }
+
+      const generation = await apiGet<{
+        id: string;
+        status: string;
+        progressMessage: string | null;
+        errorMessage: string | null;
+        outputAsset: Asset | null;
+      }>(`/api/generations/${generationId}`);
+
+      updateNode<GeneratorNodeData>(nodeId, (data) => ({
+        ...data,
+        generationId,
+        status: generation.status,
+        progressMessage: generation.progressMessage,
+        errorMessage: generation.errorMessage,
+        outputAsset: generation.outputAsset ?? data.outputAsset,
+      }));
+
+      if (generation.status === "COMPLETED" && generation.outputAsset) {
+        return generation.outputAsset;
+      }
+
+      if (generation.status === "FAILED" || generation.status === "CANCELED") {
+        throw new Error(generation.errorMessage ?? `${(liveNode.data as GeneratorNodeData).title} did not finish successfully.`);
+      }
+
+      await sleep(1500);
+    }
+
+    throw new Error("The workflow timed out while waiting for Gemini to finish.");
+  }
+
+  function detachTemplateExecution(generatorNodeId: string, outputAsset: Asset) {
+    const liveGenerator = nodesRef.current.find((node) => node.id === generatorNodeId);
+    if (!liveGenerator || liveGenerator.kind !== "IMAGE_GENERATOR") return;
+
+    const generatorData = liveGenerator.data as GeneratorNodeData;
+    const generationId = generatorData.generationId;
+    const assistantId = generatorData.promptNodeId;
+    const liveAssistant = assistantId
+      ? nodesRef.current.find((node) => node.id === assistantId && node.kind === "ASSISTANT")
+      : null;
+    const textId = liveAssistant ? (liveAssistant.data as AssistantNodeData).textNodeId : null;
+
+    if (generationId) {
+      setHiddenGenerationIds((current) => [...new Set([...current, generationId])]);
+    }
+
+    setNodes((current) =>
+      current.map((node) => {
+        if (node.id === generatorNodeId && node.kind === "IMAGE_GENERATOR") {
+          return {
+            ...node,
+            data: {
+              ...(node.data as GeneratorNodeData),
+              generationId: undefined,
+              status: "COMPLETED",
+              progressMessage: null,
+              errorMessage: null,
+              outputAsset,
+            } satisfies GeneratorNodeData,
+          };
+        }
+
+        if (assistantId && node.id === assistantId && node.kind === "ASSISTANT") {
+          return {
+            ...node,
+            data: {
+              ...(node.data as AssistantNodeData),
+              generationId: undefined,
+            } satisfies AssistantNodeData,
+          };
+        }
+
+        if (textId && node.id === textId && node.kind === "TEXT") {
+          return {
+            ...node,
+            data: {
+              ...(node.data as TextNodeData),
+              generationId: undefined,
+            } satisfies TextNodeData,
+          };
+        }
+
+        return node;
+      }),
+    );
+  }
+
+  async function runSelectedWorkflow() {
+    try {
+      setError(null);
+      const workflowNodeIds = getWorkflowNodeIdsFromSelectionOrAll();
+      const generatorOrder = getWorkflowGeneratorOrder(workflowNodeIds);
+      if (generatorOrder.length === 0) {
+        throw new Error("This workflow does not contain any Image Generator nodes.");
+      }
+
+      setWorkflowBusyLabel(`Running workflow (${generatorOrder.length} step${generatorOrder.length === 1 ? "" : "s"})...`);
+
+      for (const generatorNode of generatorOrder) {
+        const liveGenerator = nodesRef.current.find((node) => node.id === generatorNode.id);
+        if (!liveGenerator || liveGenerator.kind !== "IMAGE_GENERATOR") {
+          throw new Error("The workflow changed while it was running.");
+        }
+
+        const generatorData = liveGenerator.data as GeneratorNodeData;
+        const assistantNode = generatorData.promptNodeId ? nodesRef.current.find((node) => node.id === generatorData.promptNodeId) : null;
+
+        if (!assistantNode || assistantNode.kind !== "ASSISTANT") {
+          throw new Error(`${generatorData.title} is missing its Assistant node.`);
+        }
+
+        const refinedPrompt = await runAssistantWithContext(assistantNode, liveGenerator);
+        if (!refinedPrompt) {
+          throw new Error(`Could not prepare the prompt for ${generatorData.title}.`);
+        }
+
+        const generationId = await runGenerator(liveGenerator, refinedPrompt);
+        if (!generationId) {
+          throw new Error(`Could not start ${generatorData.title}.`);
+        }
+
+        const outputAsset = await waitForGeneratorToFinish(generationId, liveGenerator.id);
+        detachTemplateExecution(liveGenerator.id, outputAsset);
+      }
+
+      setToast(`Workflow completed. ${generatorOrder.length} generation step${generatorOrder.length === 1 ? "" : "s"} finished.`);
+    } catch (workflowError) {
+      setError(workflowError instanceof Error ? workflowError.message : "Could not run the workflow.");
+    } finally {
+      setWorkflowBusyLabel(null);
+    }
+  }
 
   function screenToWorld(clientX: number, clientY: number) {
     const rect = viewportRef.current?.getBoundingClientRect();
@@ -2022,7 +2799,7 @@ export function RenderFlowEditor({ projectId, sessionId }: RenderFlowEditorProps
 
   function resolveSourceAsset(nodeId: string | null) {
     if (!nodeId) return null;
-    const node = nodeById.get(nodeId);
+    const node = nodesRef.current.find((candidate) => candidate.id === nodeId) ?? nodeById.get(nodeId);
     if (!node) return null;
     if (node.kind === "IMAGE") return (node.data as ImageNodeData).asset ?? null;
     if (node.kind === "IMAGE_GENERATOR") return (node.data as GeneratorNodeData).outputAsset ?? null;
@@ -2033,8 +2810,10 @@ export function RenderFlowEditor({ projectId, sessionId }: RenderFlowEditorProps
     const assetIds: string[] = [];
     const referenceImageIds: string[] = [];
 
+    const liveNodeById = new Map(nodesRef.current.map((node) => [node.id, node]));
+
     for (const referenceNodeId of referenceNodeIds.slice(0, 5)) {
-      const node = nodeById.get(referenceNodeId);
+      const node = liveNodeById.get(referenceNodeId) ?? nodeById.get(referenceNodeId);
       if (!node) continue;
 
       if (node.kind === "IMAGE") {
@@ -2065,29 +2844,34 @@ export function RenderFlowEditor({ projectId, sessionId }: RenderFlowEditorProps
   }
 
   function downstreamGeneratorForAssistant(assistantId: string) {
-    return nodes.find(
-      (node) => node.kind === "IMAGE_GENERATOR" && (node.data as GeneratorNodeData).promptNodeId === assistantId,
+    return (
+      nodesRef.current.find(
+        (node) => node.kind === "IMAGE_GENERATOR" && (node.data as GeneratorNodeData).promptNodeId === assistantId,
+      ) ??
+      nodes.find((node) => node.kind === "IMAGE_GENERATOR" && (node.data as GeneratorNodeData).promptNodeId === assistantId)
     );
   }
 
-  async function runAssistant(node: CanvasNode) {
+  async function runAssistantWithContext(node: CanvasNode, downstreamGeneratorOverride: CanvasNode | null = null) {
     if (!flowData || node.kind !== "ASSISTANT") return;
     const assistant = node.data as AssistantNodeData;
 
     if (chatGPTStatus.data && !chatGPTStatus.data.connected) {
       setError("ChatGPT is not connected. Open Settings and reconnect ChatGPT first.");
-      return;
+      return false;
     }
 
-    const textNode = assistant.textNodeId ? nodeById.get(assistant.textNodeId) : null;
+    const liveNodeById = new Map(nodesRef.current.map((candidate) => [candidate.id, candidate]));
+    const textNode = assistant.textNodeId ? liveNodeById.get(assistant.textNodeId) ?? nodeById.get(assistant.textNodeId) : null;
     const instruction = textNode?.kind === "TEXT" ? (textNode.data as TextNodeData).text.trim() : "";
 
     if (!instruction) {
       setError("Connect a Text node and write the instruction first.");
-      return;
+      return false;
     }
 
-    const downstreamGenerator = downstreamGeneratorForAssistant(node.id);
+    const downstreamGenerator =
+      downstreamGeneratorOverride?.kind === "IMAGE_GENERATOR" ? downstreamGeneratorOverride : downstreamGeneratorForAssistant(node.id);
     const generatorData = downstreamGenerator?.kind === "IMAGE_GENERATOR"
       ? (downstreamGenerator.data as GeneratorNodeData)
       : null;
@@ -2097,7 +2881,7 @@ export function RenderFlowEditor({ projectId, sessionId }: RenderFlowEditorProps
 
     if (!sourceAsset) {
       setError("The Assistant needs a source image context for this render session.");
-      return;
+      return false;
     }
 
     updateNode<AssistantNodeData>(node.id, (data) => ({
@@ -2129,45 +2913,53 @@ export function RenderFlowEditor({ projectId, sessionId }: RenderFlowEditorProps
         errorMessage: null,
       }));
       setToast("Assistant prompt is ready");
+      return result.prompt;
     } catch (runError) {
       const message = runError instanceof Error ? runError.message : "ChatGPT Assistant failed.";
       updateNode<AssistantNodeData>(node.id, (data) => ({ ...data, state: "ERROR", errorMessage: message }));
       setError(message);
+      return false;
     }
   }
 
-  async function runGenerator(node: CanvasNode) {
+  async function runAssistant(node: CanvasNode) {
+    return runAssistantWithContext(node);
+  }
+
+  async function runGenerator(node: CanvasNode, refinedPromptOverride?: string) {
     if (!flowData || node.kind !== "IMAGE_GENERATOR") return;
 
     if (geminiStatus.data && !geminiStatus.data.connected) {
       setError("Gemini is not connected. Open Settings and reconnect Gemini first.");
-      return;
+      return null;
     }
 
     const generator = node.data as GeneratorNodeData;
-    const assistantNode = generator.promptNodeId ? nodeById.get(generator.promptNodeId) : null;
+    const liveNodeById = new Map(nodesRef.current.map((candidate) => [candidate.id, candidate]));
+    const assistantNode = generator.promptNodeId ? liveNodeById.get(generator.promptNodeId) ?? nodeById.get(generator.promptNodeId) : null;
     if (!assistantNode || assistantNode.kind !== "ASSISTANT") {
       setError("Connect an Assistant node to the prompt port first.");
-      return;
+      return null;
     }
 
     const assistant = assistantNode.data as AssistantNodeData;
-    if (!assistant.outputText.trim()) {
+    const refinedPrompt = refinedPromptOverride?.trim() || assistant.outputText.trim();
+    if (!refinedPrompt) {
       setError("Run the connected Assistant first so the refined prompt is ready.");
-      return;
+      return null;
     }
 
-    const textNode = assistant.textNodeId ? nodeById.get(assistant.textNodeId) : null;
+    const textNode = assistant.textNodeId ? liveNodeById.get(assistant.textNodeId) ?? nodeById.get(assistant.textNodeId) : null;
     const instruction = textNode?.kind === "TEXT" ? (textNode.data as TextNodeData).text.trim() : "";
     if (!instruction) {
       setError("The connected Assistant has no Text input.");
-      return;
+      return null;
     }
 
     const sourceAsset = resolveSourceAsset(generator.sourceNodeId);
     if (!sourceAsset) {
       setError("Connect a saved source image or a completed generator to the Source image port.");
-      return;
+      return null;
     }
 
     const existingGeneration = generator.generationId ? generationById.get(generator.generationId) : null;
@@ -2177,7 +2969,7 @@ export function RenderFlowEditor({ projectId, sessionId }: RenderFlowEditorProps
         !existingGeneration.outputAsset &&
         existingGeneration.sourceAssetId === sourceAsset.id &&
         existingGeneration.userInstruction.trim() === instruction &&
-        existingGeneration.refinedPrompt?.trim() === assistant.outputText.trim() &&
+        existingGeneration.refinedPrompt?.trim() === refinedPrompt &&
         existingGeneration.preserveMode === generator.preserveMode &&
         existingGeneration.preserveEverythingElse === generator.preserveEverythingElse,
     );
@@ -2205,7 +2997,7 @@ export function RenderFlowEditor({ projectId, sessionId }: RenderFlowEditorProps
         }));
         setToast("Gemini generation retry started");
         await flowQuery.refetch();
-        return;
+        return result.id;
       } catch (retryError) {
         const message = retryError instanceof Error ? retryError.message : "Could not retry Gemini.";
         updateNode<GeneratorNodeData>(node.id, (data) => ({
@@ -2215,7 +3007,7 @@ export function RenderFlowEditor({ projectId, sessionId }: RenderFlowEditorProps
           progressMessage: null,
         }));
         setError(message);
-        return;
+        return null;
       }
     }
 
@@ -2235,7 +3027,7 @@ export function RenderFlowEditor({ projectId, sessionId }: RenderFlowEditorProps
         sessionId,
         sourceAssetId: sourceAsset.id,
         instruction,
-        refinedPrompt: assistant.outputText,
+        refinedPrompt,
         preserveMode: generator.preserveMode,
         preserveEverythingElse: generator.preserveEverythingElse,
         ...references,
@@ -2258,6 +3050,7 @@ export function RenderFlowEditor({ projectId, sessionId }: RenderFlowEditorProps
 
       setToast("Gemini generation started");
       await flowQuery.refetch();
+      return result.id;
     } catch (runError) {
       const message = runError instanceof Error ? runError.message : "Could not start Gemini.";
       updateNode<GeneratorNodeData>(node.id, (data) => ({
@@ -2267,6 +3060,7 @@ export function RenderFlowEditor({ projectId, sessionId }: RenderFlowEditorProps
         progressMessage: null,
       }));
       setError(message);
+      return null;
     }
   }
 
@@ -2485,6 +3279,20 @@ export function RenderFlowEditor({ projectId, sessionId }: RenderFlowEditorProps
             title="Connect output"
           >
             <Link2 size={16} />
+          </button>
+        )}
+
+        {!multipleSelected && node.kind === "IMAGE" && (
+          <button
+            type="button"
+            onClick={(event) => {
+              event.stopPropagation();
+              openReplaceImagePicker(node.id);
+            }}
+            className="flex h-9 w-10 items-center justify-center rounded-lg text-white/75 hover:bg-white/[0.08] hover:text-white"
+            title="Replace image"
+          >
+            <ImagePlus size={15} />
           </button>
         )}
 
@@ -3136,18 +3944,42 @@ export function RenderFlowEditor({ projectId, sessionId }: RenderFlowEditorProps
 
   function renderImageNode(node: CanvasNode) {
     const data = node.data as ImageNodeData;
+    const hasImage = Boolean(data.asset || data.remoteFilePath || data.localFile || data.previewUrl);
+    const slotLabel = data.role === "REFERENCE" ? "Set reference image" : "Set source image";
+
     return nodeShell(
       node,
       <>
         <div className="flex h-[156px] items-center justify-center overflow-hidden rounded-t-[13px] bg-[#111113]">
-          <img src={data.previewUrl} alt={data.fileName} className="h-full w-full object-contain" />
+          {hasImage ? (
+            <img src={data.previewUrl} alt={data.fileName} className="h-full w-full object-contain" />
+          ) : (
+            <button
+              type="button"
+              onPointerDown={(event) => event.stopPropagation()}
+              onClick={(event) => {
+                event.stopPropagation();
+                openReplaceImagePicker(node.id);
+              }}
+              className="flex h-full w-full flex-col items-center justify-center gap-2 text-white/34 transition hover:bg-white/[0.025] hover:text-white/62"
+              title={slotLabel}
+            >
+              <ImagePlus size={28} strokeWidth={1.4} />
+              <span className="text-[13px] font-medium">{slotLabel}</span>
+              <span className="text-[11px] text-white/24">Workflow input slot</span>
+            </button>
+          )}
         </div>
         <div className="flex h-[47px] items-center justify-between gap-3 border-t border-white/[0.05] px-3.5">
           <div className="min-w-0">
-            <p className="truncate text-[13px] text-white/68">{data.fileName}</p>
+            <p className="truncate text-[13px] text-white/68">{hasImage ? data.fileName : slotLabel}</p>
             <p className="mt-0.5 text-[13px] uppercase tracking-[0.08em] text-white/30">{data.role.toLowerCase()}</p>
           </div>
-          {data.localFile && <span className="rounded-md bg-[#6f55ff]/15 px-1.5 py-1 text-[13px] text-[#b9aaff]">LOCAL</span>}
+          {!hasImage ? (
+            <span className="rounded-md bg-amber-400/10 px-1.5 py-1 text-[11px] font-medium text-amber-200/80">INPUT</span>
+          ) : data.localFile ? (
+            <span className="rounded-md bg-[#6f55ff]/15 px-1.5 py-1 text-[13px] text-[#b9aaff]">LOCAL</span>
+          ) : null}
         </div>
 
         {renderPort({
@@ -3208,6 +4040,26 @@ export function RenderFlowEditor({ projectId, sessionId }: RenderFlowEditorProps
           event.target.value = "";
         }}
       />
+      <input
+        ref={workflowImportInputRef}
+        type="file"
+        accept=".json,.eskflow,.eskflow.json"
+        className="hidden"
+        onChange={(event) => {
+          void handleWorkflowImportFiles(event.target.files);
+          event.target.value = "";
+        }}
+      />
+      <input
+        ref={replaceImageInputRef}
+        type="file"
+        accept="image/png,image/jpeg,image/webp"
+        className="hidden"
+        onChange={(event) => {
+          void handleReplaceImageFile(event.target.files);
+          event.target.value = "";
+        }}
+      />
 
       <header className="relative z-50 flex h-[62px] shrink-0 items-center justify-between border-b border-white/[0.06] bg-[#141416] px-4">
         <div className="flex min-w-0 items-center gap-3">
@@ -3239,6 +4091,51 @@ export function RenderFlowEditor({ projectId, sessionId }: RenderFlowEditorProps
             Gemini
           </div>
           <span className="mx-1 h-5 w-px bg-white/[0.07]" />
+          <button
+            type="button"
+            onClick={() => void copyWorkflowToClipboard()}
+            disabled={Boolean(workflowBusyLabel)}
+            className="flex h-9 items-center gap-2 rounded-lg border border-white/[0.08] bg-white/[0.025] px-3 text-[13px] text-white/68 hover:bg-white/[0.06] disabled:cursor-not-allowed disabled:opacity-45"
+            title="Copy the selected workflow component, or the whole canvas when nothing is selected (Ctrl/Cmd + C)"
+          >
+            <Copy size={14} /> Copy Flow
+          </button>
+          <button
+            type="button"
+            onClick={() => void pasteWorkflowFromClipboard()}
+            disabled={Boolean(workflowBusyLabel)}
+            className="flex h-9 items-center gap-2 rounded-lg border border-white/[0.08] bg-white/[0.025] px-3 text-[13px] text-white/68 hover:bg-white/[0.06] disabled:cursor-not-allowed disabled:opacity-45"
+            title="Paste the last copied workflow into this canvas (Ctrl/Cmd + V)"
+          >
+            <Plus size={14} /> Paste Flow
+          </button>
+          <button
+            type="button"
+            onClick={() => workflowImportInputRef.current?.click()}
+            disabled={Boolean(workflowBusyLabel)}
+            className="flex h-9 items-center gap-2 rounded-lg border border-white/[0.08] bg-white/[0.025] px-3 text-[13px] text-white/68 hover:bg-white/[0.06] disabled:cursor-not-allowed disabled:opacity-45"
+            title="Import a workflow file"
+          >
+            <ImagePlus size={14} /> Import
+          </button>
+          <button
+            type="button"
+            onClick={() => void exportWorkflowToFile()}
+            disabled={Boolean(workflowBusyLabel)}
+            className="flex h-9 items-center gap-2 rounded-lg border border-white/[0.08] bg-white/[0.025] px-3 text-[13px] text-white/68 hover:bg-white/[0.06] disabled:cursor-not-allowed disabled:opacity-45"
+            title="Export the selected workflow component, or the whole canvas when nothing is selected"
+          >
+            <Download size={14} /> Export
+          </button>
+          <button
+            type="button"
+            onClick={() => void runSelectedWorkflow()}
+            disabled={Boolean(workflowBusyLabel)}
+            className="flex h-9 items-center gap-2 rounded-lg border border-emerald-400/20 bg-emerald-400/10 px-3 text-[13px] text-emerald-100 hover:bg-emerald-400/15 disabled:cursor-not-allowed disabled:opacity-45"
+            title="Run the selected workflow component, or the whole canvas when nothing is selected (Ctrl/Cmd + R)"
+          >
+            <CirclePlay size={14} /> Run Flow
+          </button>
           <button
             type="button"
             onClick={() => router.push("/settings")}
@@ -3519,8 +4416,13 @@ export function RenderFlowEditor({ projectId, sessionId }: RenderFlowEditorProps
           </div>
         )}
 
-        {(error || toast) && (
+        {(error || toast || workflowBusyLabel) && (
           <div className="absolute bottom-5 right-5 z-[90] max-w-[430px]">
+            {workflowBusyLabel && (
+              <div className="mb-2 flex items-center gap-2 rounded-xl border border-white/[0.08] bg-[#17171a]/95 px-4 py-3 text-[13px] text-white/70 shadow-xl backdrop-blur">
+                <CirclePlay size={14} className="text-emerald-300" /> {workflowBusyLabel}
+              </div>
+            )}
             {error && (
               <div className="mb-2 flex items-start gap-2 rounded-xl border border-red-500/20 bg-[#251719]/95 px-4 py-3 text-[13px] leading-5 text-red-200 shadow-xl backdrop-blur">
                 <AlertCircle size={14} className="mt-0.5 shrink-0" />

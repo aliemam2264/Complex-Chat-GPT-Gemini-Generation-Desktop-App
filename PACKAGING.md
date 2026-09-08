@@ -116,3 +116,25 @@ End users do not need these, but the Windows machine that creates the installer 
 ## Code signing
 
 The installer works unsigned, but Windows SmartScreen may warn users. Before public distribution, use a Windows code-signing certificate and add signing configuration to `forge.config.cjs`.
+
+
+## Workflow sharing
+
+The Flow editor now supports:
+
+- **Copy Flow / Paste Flow** between canvases on the same machine
+- **Import / Export** workflow files (`.eskflow.json`) for team handoff
+- **Replace image** on any image node, then **Run Flow** to execute the duplicated workflow on the new source image
+
+If nothing is selected, these actions use the whole canvas. If you select any node inside a flow, the connected workflow component is used.
+
+## Antivirus / SmartScreen note
+
+No installer can be made to “bypass” antivirus safely. The safe way to reduce false positives is:
+
+1. keep the app metadata stable (`ProductName`, `CompanyName`, executable name)
+2. build from a clean desktop `dist` folder each time
+3. sign the final installer/exe with a real Windows code-signing certificate
+4. build repeated public releases from the same signed identity so SmartScreen reputation can accumulate
+
+This patch prepares the build with cleaner metadata and a clean desktop compile step, but **real code signing is still required** for the best antivirus / SmartScreen results.

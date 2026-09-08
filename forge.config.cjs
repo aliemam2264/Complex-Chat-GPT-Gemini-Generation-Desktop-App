@@ -4,6 +4,14 @@ module.exports = {
   packagerConfig: {
     asar: true,
     executableName: "EskanderPlusStudio",
+    appCopyright: "Copyright (c) Eskander Plus Studio",
+    win32metadata: {
+      CompanyName: "Eskander Plus Studio",
+      FileDescription: "Eskander Plus Studio desktop application",
+      InternalName: "EskanderPlusStudio",
+      OriginalFilename: "EskanderPlusStudio.exe",
+      ProductName: "Eskander Plus Studio",
+    },
     icon: path.resolve(__dirname, "assets", "icon.ico"),
     extraResource: [
       path.resolve(__dirname, "packaging", "web-runtime"),
