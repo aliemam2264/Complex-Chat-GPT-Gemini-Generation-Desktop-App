@@ -60,6 +60,8 @@ model ImageSession {
   project   Project @relation(fields: [projectId], references: [id], onDelete: Cascade)
 
   name String
+  isWorkspace Boolean @default(false)
+  flowStateJson String?
 
   assets      Asset[]
   generations GenerationRun[]
@@ -130,6 +132,8 @@ model GenerationRun {
 
   promptProvider ProviderType?
   imageProvider  ProviderType?
+  flowNodeId     String?
+  keepOutput     Boolean @default(false)
 
   status GenerationStatus @default(PENDING)
 
@@ -156,6 +160,7 @@ model GenerationRun {
   @@index([imageSessionId])
   @@index([sourceAssetId])
   @@index([status])
+  @@index([flowNodeId])
 }
 
 model GenerationReferenceImage {

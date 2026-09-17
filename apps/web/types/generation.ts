@@ -31,6 +31,8 @@ export type GenerationRun = {
   promptProvider: "LOCAL" | "CHATGPT_BROWSER" | "GEMINI_BROWSER" | "OPENAI_API" | "GEMINI_API" | null;
 
   imageProvider: "LOCAL" | "CHATGPT_BROWSER" | "GEMINI_BROWSER" | "OPENAI_API" | "GEMINI_API" | null;
+  flowNodeId: string | null;
+  keepOutput: boolean;
 
   status: "PENDING" | "PROMPTING" | "PROMPT_READY" | "GENERATING" | "DOWNLOADING" | "COMPLETED" | "FAILED" | "CANCELED";
 

@@ -16,6 +16,7 @@ import {
 import { getStorageRoot } from "../config/storage";
 import { imageJobManager, promptJobManager } from "../services/background-job-manager";
 import { getEffectivePromptPreset } from "../services/prompt-preset-settings";
+import { buildRoleAwareImagePrompt, stageRoleAwareImages } from "../services/role-aware-images";
 
 type GenerationParams = {
   generationId: string;
@@ -98,6 +99,49 @@ async function markGenerationCanceled(generationId: string) {
       canceledAt: now,
     },
   });
+}
+
+async function cleanupPreviousUnkeptFlowOutputs(generationId: string) {
+  const current = await prisma.generationRun.findUnique({
+    where: { id: generationId },
+    select: { id: true, imageSessionId: true, flowNodeId: true },
+  });
+
+  if (!current?.flowNodeId) return;
+
+  const previous = await prisma.generationRun.findMany({
+    where: {
+      id: { not: current.id },
+      imageSessionId: current.imageSessionId,
+      flowNodeId: current.flowNodeId,
+      keepOutput: false,
+      outputAssetId: { not: null },
+      status: "COMPLETED",
+    },
+    include: { outputAsset: true },
+    orderBy: { createdAt: "asc" },
+  });
+
+  for (const oldGeneration of previous) {
+    const asset = oldGeneration.outputAsset;
+    if (!asset) continue;
+
+    const [sourceUseCount, referenceUseCount] = await Promise.all([
+      prisma.generationRun.count({ where: { sourceAssetId: asset.id } }),
+      prisma.generationReferenceImage.count({ where: { filePath: asset.filePath } }),
+    ]);
+    if (sourceUseCount > 0 || referenceUseCount > 0) continue;
+
+    try {
+      await prisma.$transaction(async (transaction) => {
+        await transaction.generationRun.delete({ where: { id: oldGeneration.id } });
+        await transaction.asset.delete({ where: { id: asset.id } });
+      });
+      await rm(join(getStorageRoot(), asset.filePath), { force: true }).catch(() => undefined);
+    } catch (error) {
+      console.warn(`[GenerationCleanup] Could not remove unkept output ${asset.id}:`, error);
+    }
+  }
 }
 
 /* -------------------------------------------------------------------------- */
@@ -664,8 +708,8 @@ export async function retryGeneration(request: Request<GenerationParams>, respon
       where: { id: generation.id },
       data: {
         status: "GENERATING",
-        imageProvider: "GEMINI_BROWSER",
-        progressStage: "GEMINI_STARTING",
+        imageProvider: generation.imageProvider === "CHATGPT_BROWSER" ? "CHATGPT_BROWSER" : "GEMINI_BROWSER",
+        progressStage: "IMAGE_STARTING",
         progressMessage: "Retrying image generation...",
         errorMessage: null,
         completedAt: null,
@@ -708,6 +752,29 @@ export async function retryGeneration(request: Request<GenerationParams>, respon
     success: true,
     data: updated,
   });
+}
+
+export async function keepGenerationOutput(request: Request<GenerationParams>, response: Response) {
+  const { generationId } = request.params;
+
+  const generation = await prisma.generationRun.findUnique({
+    where: { id: generationId },
+    select: { id: true, status: true, outputAssetId: true },
+  });
+
+  if (!generation) {
+    return response.status(404).json({ success: false, message: "Generation not found." });
+  }
+  if (generation.status !== "COMPLETED" || !generation.outputAssetId) {
+    return response.status(409).json({ success: false, message: "Only a completed generated image can be kept." });
+  }
+
+  const updated = await prisma.generationRun.update({
+    where: { id: generationId },
+    data: { keepOutput: true },
+  });
+
+  return response.json({ success: true, data: updated });
 }
 
 /* -------------------------------------------------------------------------- */
@@ -817,7 +884,7 @@ export async function connectChatGPT(_request: Request, response: Response) {
       success: true,
 
       data: {
-        message: "Chrome opened. Sign in to ChatGPT, then close Chrome and check the connection.",
+        message: "Chrome opened. Sign in to ChatGPT and keep the window open; Eskander will verify the same persistent session and hide the automation window automatically.",
       },
     });
   } catch (error) {
@@ -931,17 +998,29 @@ async function runPromptJob(generationId: string, signal: AbortSignal) {
     const preservePresetPrompt = await getEffectivePromptPreset(generation.preserveMode);
 
     try {
-      refinedPrompt = await chatGPTPromptProvider.generate({
+      const promptStage = await stageRoleAwareImages({
+        source: {
+          absolutePath: join(getStorageRoot(), generation.sourceAsset.filePath),
+          mimeType: generation.sourceAsset.mimeType,
+        },
+        references: generation.referenceImages.map((referenceImage) => ({
+          absolutePath: join(getStorageRoot(), referenceImage.filePath),
+          mimeType: referenceImage.mimeType,
+        })),
+      });
+
+      try {
+        refinedPrompt = await chatGPTPromptProvider.generate({
         instruction: generation.userInstruction,
         preserveMode: generation.preserveMode,
         preserveEverythingElse: generation.preserveEverythingElse,
         preservePresetPrompt,
-        sourceImagePath: join(getStorageRoot(), generation.sourceAsset.filePath),
+        sourceImagePath: promptStage.sourcePath,
         sourceMimeType: generation.sourceAsset.mimeType,
-        referenceImages: generation.referenceImages.map((referenceImage) => ({
-          path: join(getStorageRoot(), referenceImage.filePath),
-          fileName: referenceImage.fileName,
-          mimeType: referenceImage.mimeType,
+        referenceImages: promptStage.referencePaths.map((path, index) => ({
+          path,
+          fileName: `ref ${index + 1}`,
+          mimeType: generation.referenceImages[index]?.mimeType ?? "image/png",
         })),
         signal,
         onProgress: async ({ stage, message }) => {
@@ -962,6 +1041,9 @@ async function runPromptJob(generationId: string, signal: AbortSignal) {
           });
         },
       });
+      } finally {
+        await promptStage.cleanup();
+      }
     } catch (promptError) {
       if (signal.aborted) {
         await markGenerationCanceled(generation.id);
@@ -1099,8 +1181,14 @@ export async function runGeminiJob(generationId: string, signal: AbortSignal) {
   const storageRoot = getStorageRoot();
   const sourceImagePath = join(storageRoot, generation.sourceAsset.filePath);
   const outputDirectory = join(storageRoot, "projects", generation.projectId, generation.imageSessionId);
+  const providerType = generation.imageProvider === "CHATGPT_BROWSER" ? "CHATGPT_BROWSER" : "GEMINI_BROWSER";
+  const providerLabel = providerType === "CHATGPT_BROWSER" ? "ChatGPT" : "Gemini";
+  const imageProvider = providerType === "CHATGPT_BROWSER"
+    ? { generate: (input: Parameters<typeof geminiProvider.generate>[0]) => chatGPTPromptProvider.generateImage(input) }
+    : geminiProvider;
 
   let downloadedPath: string | null = null;
+  let stagedImages: Awaited<ReturnType<typeof stageRoleAwareImages>> | null = null;
 
   try {
     if (signal.aborted) {
@@ -1115,13 +1203,22 @@ export async function runGeminiJob(generationId: string, signal: AbortSignal) {
       },
       data: {
         status: "GENERATING",
-        imageProvider: "GEMINI_BROWSER",
-        progressStage: "GEMINI_STARTING",
-        progressMessage: "Preparing Gemini...",
+        imageProvider: providerType,
+        progressStage: "IMAGE_STARTING",
+        progressMessage: `Preparing ${providerLabel}...`,
         errorMessage: null,
       },
     });
 
+    stagedImages = await stageRoleAwareImages({
+      source: { absolutePath: sourceImagePath, mimeType: generation.sourceAsset.mimeType },
+      references: generation.referenceImages.map((referenceImage) => ({
+        absolutePath: join(storageRoot, referenceImage.filePath),
+        mimeType: referenceImage.mimeType,
+      })),
+    });
+
+    const roleAwarePrompt = buildRoleAwareImagePrompt(generation.refinedPrompt, stagedImages.referencePaths.length);
     let result: Awaited<ReturnType<typeof geminiProvider.generate>> | null = null;
     let lastError: unknown = null;
     const maxAttempts = 2;
@@ -1136,26 +1233,24 @@ export async function runGeminiJob(generationId: string, signal: AbortSignal) {
         await prisma.generationRun.updateMany({
           where: { id: generation.id, status: "GENERATING" },
           data: {
-            progressStage: "GEMINI_GENERATING",
-            progressMessage: attempt === 1 ? "Gemini is editing your render..." : "Retrying Gemini generation...",
+            progressStage: "IMAGE_GENERATING",
+            progressMessage: attempt === 1 ? `${providerLabel} is editing your image...` : `Retrying ${providerLabel} generation...`,
             errorMessage: null,
           },
         });
 
-        const candidate = await geminiProvider.generate({
-          sourceImagePath,
-          referenceImagePaths: generation.referenceImages.map((referenceImage) =>
-            join(storageRoot, referenceImage.filePath),
-          ),
+        const candidate = await imageProvider.generate({
+          sourceImagePath: stagedImages.sourcePath,
+          referenceImagePaths: stagedImages.referencePaths,
           outputDirectory,
-          prompt: generation.refinedPrompt,
+          prompt: roleAwarePrompt,
           signal,
         });
 
         if (await filesHaveSameSha256(sourceImagePath, candidate.absolutePath)) {
           await rm(candidate.absolutePath, { force: true }).catch(() => undefined);
           throw new Error(
-            "Gemini returned the uploaded source image instead of a new generated result. Retrying the generation.",
+            `${providerLabel} returned the uploaded source image instead of a new generated result. Retrying the generation.`,
           );
         }
 
@@ -1167,7 +1262,7 @@ export async function runGeminiJob(generationId: string, signal: AbortSignal) {
           return;
         }
 
-        if (error instanceof GeminiLoginRequiredError) {
+        if (error instanceof GeminiLoginRequiredError || error instanceof ChatGPTLoginRequiredError) {
           throw error;
         }
 
@@ -1188,14 +1283,14 @@ export async function runGeminiJob(generationId: string, signal: AbortSignal) {
         }
 
         lastError = error;
-        console.warn(`[GeminiJob] ${generation.id} attempt ${attempt} failed:`, error);
+        console.warn(`[ImageJob:${providerLabel}] ${generation.id} attempt ${attempt} failed:`, error);
 
         if (attempt < maxAttempts) {
           await prisma.generationRun.updateMany({
             where: { id: generation.id, status: "GENERATING" },
             data: {
-              progressStage: "GEMINI_GENERATING",
-              progressMessage: "Gemini encountered a temporary issue. Retrying...",
+              progressStage: "IMAGE_GENERATING",
+              progressMessage: `${providerLabel} encountered a temporary issue. Retrying...`,
             },
           });
 
@@ -1205,7 +1300,7 @@ export async function runGeminiJob(generationId: string, signal: AbortSignal) {
     }
 
     if (!result) {
-      throw lastError ?? new Error("Gemini generation failed.");
+      throw lastError ?? new Error(`${providerLabel} generation failed.`);
     }
 
     downloadedPath = result.absolutePath;
@@ -1220,8 +1315,8 @@ export async function runGeminiJob(generationId: string, signal: AbortSignal) {
       where: { id: generation.id, status: "GENERATING" },
       data: {
         status: "DOWNLOADING",
-        progressStage: "SAVING_VERSION",
-        progressMessage: "Saving generated version...",
+        progressStage: "SAVING_OUTPUT",
+        progressMessage: "Saving generated image...",
         errorMessage: null,
       },
     });
@@ -1265,7 +1360,7 @@ export async function runGeminiJob(generationId: string, signal: AbortSignal) {
           outputAssetId: outputAsset.id,
           status: "COMPLETED",
           progressStage: "DONE",
-          progressMessage: "Generated version is ready.",
+          progressMessage: "Generated image is ready.",
           completedAt: new Date(),
           canceledAt: null,
           cancelRequestedAt: null,
@@ -1278,7 +1373,8 @@ export async function runGeminiJob(generationId: string, signal: AbortSignal) {
 
     downloadedPath = null;
 
-    console.log(`[GeminiJob] ${generation.id} completed. Output asset: ${completed.asset.id}`);
+    await cleanupPreviousUnkeptFlowOutputs(generation.id);
+    console.log(`[ImageJob:${providerLabel}] ${generation.id} completed. Output asset: ${completed.asset.id}`);
   } catch (error) {
     if (signal.aborted || (error instanceof Error && error.message === "GENERATION_NOT_ACTIVE")) {
       if (downloadedPath) {
@@ -1289,15 +1385,15 @@ export async function runGeminiJob(generationId: string, signal: AbortSignal) {
       return;
     }
 
-    if (error instanceof GeminiLoginRequiredError) {
-      const message = "Gemini sign in is required. Reconnect Gemini from Settings and try again.";
+    if (error instanceof GeminiLoginRequiredError || error instanceof ChatGPTLoginRequiredError) {
+      const message = `${providerLabel} sign in is required. Reconnect ${providerLabel} from Settings and try again.`;
 
       await prisma.generationRun.updateMany({
         where: { id: generation.id, status: { not: "CANCELED" } },
         data: {
           status: "FAILED",
-          imageProvider: "GEMINI_BROWSER",
-          progressStage: "GEMINI_LOGIN_REQUIRED",
+          imageProvider: providerType,
+          progressStage: "IMAGE_LOGIN_REQUIRED",
           progressMessage: message,
           errorMessage: error.message,
         },
@@ -1306,23 +1402,25 @@ export async function runGeminiJob(generationId: string, signal: AbortSignal) {
       return;
     }
 
-    console.error(`[GeminiJob] ${generation.id} failed after retries:`, error);
+    console.error(`[ImageJob:${providerLabel}] ${generation.id} failed after retries:`, error);
 
     if (downloadedPath) {
       await rm(downloadedPath, { force: true }).catch(() => undefined);
     }
 
-    const message = error instanceof Error ? error.message : "Nano Banana generation failed.";
+    const message = error instanceof Error ? error.message : `${providerLabel} image generation failed.`;
 
     await prisma.generationRun.updateMany({
       where: { id: generation.id, status: { not: "CANCELED" } },
       data: {
         status: "FAILED",
-        imageProvider: "GEMINI_BROWSER",
+        imageProvider: providerType,
         progressStage: "FAILED",
         progressMessage: message,
         errorMessage: message,
       },
     });
+  } finally {
+    await stagedImages?.cleanup();
   }
 }

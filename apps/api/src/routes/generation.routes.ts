@@ -19,6 +19,7 @@ import {
   getGenerationActivity,
   cancelGeneration,
   retryGeneration,
+  keepGenerationOutput,
 } from "../controllers/generation.controller";
 
 export const generationRouter = Router();
@@ -36,6 +37,7 @@ generationRouter.delete("/prompt-presets/:mode", resetPromptPreset);
 generationRouter.post("/:generationId/cancel", cancelGeneration);
 
 generationRouter.post("/:generationId/retry", retryGeneration);
+generationRouter.post("/:generationId/keep", keepGenerationOutput);
 
 generationRouter.post("/:generationId/regenerate-prompt", regeneratePrompt);
 

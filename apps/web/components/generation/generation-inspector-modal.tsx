@@ -72,7 +72,7 @@ export function GenerationInspectorModal() {
     Boolean(
       generation?.imageProvider === "GEMINI_BROWSER" ||
         generation?.progressStage?.startsWith("GEMINI_") ||
-        generation?.progressStage === "SAVING_VERSION",
+        (generation?.progressStage === "SAVING_OUTPUT" || generation?.progressStage === "SAVING_VERSION"),
     );
 
   const isActive = Boolean(generation && ACTIVE_STATUSES.has(generation.status));
@@ -306,7 +306,7 @@ export function GenerationInspectorModal() {
             </div>
             <h3 className="mt-5 text-base font-medium">Generation complete</h3>
             <p className="mt-2 max-w-[460px] text-sm leading-6 text-[var(--foreground-muted)]">
-              The generated render has been saved successfully as a new version.
+              The generated render has been saved successfully.
             </p>
             <div className="mt-6 flex items-center gap-2">
               <button

@@ -377,8 +377,8 @@ function ActivityItem({
       return "Generation canceled";
     }
 
-    if (item.progressStage === "SAVING_VERSION") {
-      return "Saving version";
+    if ((item.progressStage === "SAVING_OUTPUT" || item.progressStage === "SAVING_VERSION")) {
+      return "Saving output";
     }
 
     if (buildingPrompt) {
@@ -519,8 +519,8 @@ function getDefaultMessage(item: GenerationActivityItem) {
     return "Gemini is editing your render...";
   }
 
-  if (item.progressStage === "SAVING_VERSION") {
-    return "Saving the generated render as a new version...";
+  if ((item.progressStage === "SAVING_OUTPUT" || item.progressStage === "SAVING_VERSION")) {
+    return "Saving the generated image...";
   }
 
   if (item.status === "COMPLETED") {

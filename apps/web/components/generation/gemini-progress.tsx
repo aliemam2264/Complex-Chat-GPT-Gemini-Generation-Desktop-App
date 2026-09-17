@@ -20,14 +20,14 @@ const stages = [
     description: "Gemini is editing your architectural render.",
   },
   {
-    id: "SAVING_VERSION",
-    title: "Saving version",
-    description: "Downloading and attaching the generated result.",
+    id: "SAVING_OUTPUT",
+    title: "Saving output",
+    description: "Downloading the generated result.",
   },
   {
     id: "DONE",
     title: "Done",
-    description: "Your new render version is ready.",
+    description: "Your generated image is ready.",
   },
 ] as const;
 

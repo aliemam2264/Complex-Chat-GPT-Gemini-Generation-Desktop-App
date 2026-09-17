@@ -842,6 +842,8 @@ export const ImageSessionScalarFieldEnum = {
   id: 'id',
   projectId: 'projectId',
   name: 'name',
+  isWorkspace: 'isWorkspace',
+  flowStateJson: 'flowStateJson',
   createdAt: 'createdAt',
   updatedAt: 'updatedAt'
 } as const
@@ -878,6 +880,8 @@ export const GenerationRunScalarFieldEnum = {
   promptRevision: 'promptRevision',
   promptProvider: 'promptProvider',
   imageProvider: 'imageProvider',
+  flowNodeId: 'flowNodeId',
+  keepOutput: 'keepOutput',
   status: 'status',
   progressStage: 'progressStage',
   progressMessage: 'progressMessage',
@@ -945,6 +949,13 @@ export type DateTimeFieldRefInput<$PrismaModel> = FieldRefInputType<$PrismaModel
 
 
 /**
+ * Reference to a field of type 'Boolean'
+ */
+export type BooleanFieldRefInput<$PrismaModel> = FieldRefInputType<$PrismaModel, 'Boolean'>
+    
+
+
+/**
  * Reference to a field of type 'AssetType'
  */
 export type EnumAssetTypeFieldRefInput<$PrismaModel> = FieldRefInputType<$PrismaModel, 'AssetType'>
@@ -962,13 +973,6 @@ export type IntFieldRefInput<$PrismaModel> = FieldRefInputType<$PrismaModel, 'In
  * Reference to a field of type 'PreserveMode'
  */
 export type EnumPreserveModeFieldRefInput<$PrismaModel> = FieldRefInputType<$PrismaModel, 'PreserveMode'>
-    
-
-
-/**
- * Reference to a field of type 'Boolean'
- */
-export type BooleanFieldRefInput<$PrismaModel> = FieldRefInputType<$PrismaModel, 'Boolean'>
     
 
 

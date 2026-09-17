@@ -1,6 +1,6 @@
 import { Router } from "express";
 
-import { createProject, deleteProjects, getProject, getProjects } from "../controllers/project.controller";
+import { createProject, deleteProjects, ensureProjectWorkspace, getProject, getProjects } from "../controllers/project.controller";
 
 import { uploadRender } from "../middleware/upload-render";
 
@@ -12,7 +12,7 @@ import {
 } from "../controllers/image-session.controller";
 
 import { createPrompt, getGenerationHistory } from "../controllers/generation.controller";
-import { getRenderFlow } from "../controllers/flow.controller";
+import { getRenderFlow, updateRenderFlowState } from "../controllers/flow.controller";
 import { createFlowImageGeneration, refineFlowPrompt, uploadFlowImage } from "../controllers/flow-generation.controller";
 
 export const projectRouter = Router();
@@ -20,8 +20,10 @@ export const projectRouter = Router();
 projectRouter.get("/", getProjects);
 projectRouter.post("/", createProject);
 projectRouter.delete("/", deleteProjects);
+projectRouter.post("/:projectId/workspace/ensure", ensureProjectWorkspace);
 
 projectRouter.get("/:projectId/image-sessions/:sessionId/flow", getRenderFlow);
+projectRouter.patch("/:projectId/image-sessions/:sessionId/flow", updateRenderFlowState);
 projectRouter.post(
   "/:projectId/image-sessions/:sessionId/flow/images",
   uploadRender.single("image"),

@@ -48,11 +48,12 @@ import {
 import {
   useCancelGeneration,
   useCreateFlowImageGeneration,
+  useKeepGenerationOutput,
   useRefineFlowPrompt,
   useRetryGeneration,
 } from "@/hooks/use-prompt-generation";
 import { useChatGPTStatus, useGeminiStatus } from "@/hooks/use-provider-settings";
-import { apiGet, apiUpload, getAssetUrl } from "@/lib/api";
+import { apiGet, apiPatch, apiUpload, getAssetUrl } from "@/lib/api";
 import { useGenerationActivityStore } from "@/stores/use-generation-activity-store";
 
 import type { PreserveMode } from "@/types/generation";
@@ -78,6 +79,9 @@ type FlowGeneration = {
   refinedPrompt: string | null;
   preserveMode: PreserveMode;
   preserveEverythingElse: boolean;
+  imageProvider: "GEMINI_BROWSER" | "CHATGPT_BROWSER" | null;
+  flowNodeId?: string | null;
+  keepOutput?: boolean;
   status: string;
   progressStage: string | null;
   progressMessage: string | null;
@@ -126,6 +130,8 @@ type GeneratorNodeData = {
   referenceNodeIds: string[];
   preserveMode: PreserveMode;
   preserveEverythingElse: boolean;
+  imageProvider: "GEMINI_BROWSER" | "CHATGPT_BROWSER";
+  keepOutput: boolean;
   generationId?: string;
   status: string;
   progressMessage: string | null;
@@ -244,6 +250,7 @@ type WorkflowTransferNode = {
         referenceNodeIds: string[];
         preserveMode: PreserveMode;
         preserveEverythingElse: boolean;
+        imageProvider: "GEMINI_BROWSER" | "CHATGPT_BROWSER";
       }
     | {
         type: "IMAGE";
@@ -276,8 +283,11 @@ const AUTO_LAYOUT_ROW_GAP = 110;
 const AUTO_LAYOUT_COLUMN_GAP = 120;
 const IMAGE_SIZE = { width: 245, height: 205 };
 const WORKFLOW_CLIPBOARD_KEY = "eskander-flow-workflow-clipboard";
+const NODE_CLIPBOARD_KEY = "eskander-flow-node-clipboard-v1";
 const WORKFLOW_FILE_KIND = "eskander-flow-workflow";
 const WORKFLOW_FILE_VERSION = 2;
+const INTERNAL_NODE_DRAG_MIME = "application/x-eskander-node-id";
+const INTERNAL_NODE_DRAG_KIND_MIME = "application/x-eskander-node-kind";
 
 function clamp(value: number, min: number, max: number) {
   return Math.min(max, Math.max(min, value));
@@ -337,6 +347,16 @@ function imageTitle(index: number, role: ImageNodeData["role"]) {
   if (role === "SOURCE") return `Source Image #${index}`;
   if (role === "REFERENCE") return `Reference #${index}`;
   return `Image #${index}`;
+}
+
+function isSupportedImageFile(file: File) {
+  const acceptedTypes = new Set(["image/png", "image/jpeg", "image/webp"]);
+  const acceptedName = /\.(png|jpe?g|webp)$/i.test(file.name || "");
+  return acceptedTypes.has(file.type) || (!file.type && acceptedName) || file.type.startsWith("image/");
+}
+
+function isImageTransferItem(item: DataTransferItem) {
+  return item.kind === "file" && (item.type.startsWith("image/") || item.type === "");
 }
 
 function makeImageNode(input: {
@@ -441,6 +461,8 @@ function makeGenerationNodes(generation: FlowGeneration, index: number): CanvasN
         referenceNodeIds: generation.referenceImages.map((reference) => `flow-reference-${reference.id}`),
         preserveMode: generation.preserveMode,
         preserveEverythingElse: generation.preserveEverythingElse,
+        imageProvider: generation.imageProvider === "CHATGPT_BROWSER" ? "CHATGPT_BROWSER" : "GEMINI_BROWSER",
+        keepOutput: Boolean(generation.keepOutput),
         generationId: generation.id,
         status: generation.status,
         progressMessage: generation.progressMessage,
@@ -475,8 +497,6 @@ function getNodeGenerationId(node: CanvasNode) {
 }
 
 function serializeDraftNode(node: CanvasNode): CanvasNode | null {
-  if (getNodeGenerationId(node)) return null;
-
   if (node.kind !== "IMAGE") return node;
 
   const image = node.data as ImageNodeData;
@@ -683,73 +703,30 @@ function getVisibleFlowGenerations(generations: FlowGeneration[]) {
   });
 }
 
-function makeInitialNodes(data: FlowData): CanvasNode[] {
-  const visibleGenerations = getVisibleFlowGenerations(data.generations);
+function makeStarterPipelineNodes(data: FlowData): CanvasNode[] {
+  const inputAssets = data.session.assets.filter(
+    (asset) => asset.type === "ORIGINAL" || asset.type === "FLOW_INPUT",
+  );
+  const sourceAsset = inputAssets[0];
+  const sourceId = `starter-source-${data.session.id}`;
+  const textId = `starter-text-${data.session.id}`;
+  const assistantId = `starter-assistant-${data.session.id}`;
+  const generatorId = `starter-generator-${data.session.id}`;
 
-  if (visibleGenerations.length > 0) {
-    const historyNodes = visibleGenerations.flatMap((generation, index) => makeGenerationNodes(generation, index));
-    const visibleAssetIds = new Set(
-      historyNodes
-        .filter((node) => node.kind === "IMAGE")
-        .map((node) => (node.data as ImageNodeData).asset?.id)
-        .filter((id): id is string => Boolean(id)),
-    );
-    const historicalReferencePaths = new Set(
-      visibleGenerations.flatMap((generation) => generation.referenceImages.map((reference) => reference.filePath)),
-    );
-    const historicalReferenceIdentities = new Set(
-      visibleGenerations.flatMap((generation) =>
-        generation.referenceImages.map(
-          (reference) => `${reference.fileName.trim().toLowerCase()}::${reference.mimeType.trim().toLowerCase()}`,
-        ),
-      ),
-    );
-    const looseFlowInputs = data.session.assets.filter((asset) => {
-      if (asset.type !== "FLOW_INPUT" || visibleAssetIds.has(asset.id)) return false;
-      if (historicalReferencePaths.has(asset.filePath)) return false;
-
-      const identity = `${asset.fileName.trim().toLowerCase()}::${asset.mimeType.trim().toLowerCase()}`;
-      return !historicalReferenceIdentities.has(identity);
-    });
-
-    looseFlowInputs.forEach((asset, index) => {
-      historyNodes.push(
-        makeImageNode({
-          id: `flow-input-${asset.id}`,
-          x: 45 + (index % 3) * 275,
-          y: 1100 + Math.floor(index / 3) * 245,
-          title: `Flow Image #${index + 1}`,
-          asset,
-          role: "IMAGE",
-        }),
-      );
-    });
-
-    return dedupeFlowImageNodes(historyNodes);
-  }
-
-  const source = data.session.assets.find((asset) => asset.type === "ORIGINAL") ?? data.session.assets[0];
-  if (!source) return [];
-
-  const sourceId = `draft-source-${source.id}`;
-  const textId = `draft-text-${crypto.randomUUID()}`;
-  const assistantId = `draft-assistant-${crypto.randomUUID()}`;
-  const generatorId = `draft-generator-${crypto.randomUUID()}`;
-
-  const initialNodes: CanvasNode[] = [
+  const starterNodes: CanvasNode[] = [
     makeImageNode({
       id: sourceId,
-      x: 330,
-      y: 525,
+      x: 120,
+      y: 470,
       title: "Source Image #1",
-      asset: source,
+      asset: sourceAsset,
       role: "SOURCE",
     }),
     {
       id: textId,
       kind: "TEXT",
-      x: 330,
-      y: 190,
+      x: 120,
+      y: 140,
       width: TEXT_SIZE.width,
       height: TEXT_SIZE.height,
       data: {
@@ -760,8 +737,8 @@ function makeInitialNodes(data: FlowData): CanvasNode[] {
     {
       id: assistantId,
       kind: "ASSISTANT",
-      x: 840,
-      y: 180,
+      x: 630,
+      y: 130,
       width: ASSISTANT_SIZE.width,
       height: ASSISTANT_SIZE.height,
       data: {
@@ -776,8 +753,8 @@ function makeInitialNodes(data: FlowData): CanvasNode[] {
     {
       id: generatorId,
       kind: "IMAGE_GENERATOR",
-      x: 1305,
-      y: 170,
+      x: 1095,
+      y: 120,
       width: GENERATOR_SIZE.width,
       height: GENERATOR_SIZE.height,
       data: {
@@ -787,6 +764,8 @@ function makeInitialNodes(data: FlowData): CanvasNode[] {
         referenceNodeIds: [],
         preserveMode: "STRICT",
         preserveEverythingElse: true,
+        imageProvider: "GEMINI_BROWSER",
+        keepOutput: false,
         status: "DRAFT",
         progressMessage: null,
         errorMessage: null,
@@ -795,28 +774,54 @@ function makeInitialNodes(data: FlowData): CanvasNode[] {
     },
   ];
 
-  data.session.assets
-    .filter((asset) => asset.type === "FLOW_INPUT")
-    .forEach((asset, index) => {
-      initialNodes.push(
-        makeImageNode({
-          id: `flow-input-${asset.id}`,
-          x: 45 + (index % 3) * 275,
-          y: 800 + Math.floor(index / 3) * 245,
-          title: `Flow Image #${index + 1}`,
-          asset,
-          role: "IMAGE",
-        }),
-      );
-    });
+  // Preserve additional legacy inputs without turning historical generations
+  // back into version blocks. The first legacy input becomes the starter source.
+  inputAssets.slice(1).forEach((asset, index) => {
+    starterNodes.push(
+      makeImageNode({
+        id: `flow-input-${asset.id}`,
+        x: 120 + (index % 4) * 290,
+        y: 760 + Math.floor(index / 4) * 245,
+        title: `Image #${index + 2}`,
+        asset,
+        role: "IMAGE",
+      }),
+    );
+  });
 
-  return initialNodes;
+  return starterNodes;
+}
+
+function makeInitialNodes(data: FlowData): CanvasNode[] {
+  const savedState = data.session.flowState as {
+    nodes?: CanvasNode[];
+    hiddenNodeIds?: string[];
+    hiddenGenerationIds?: string[];
+  } | null | undefined;
+
+  if (savedState && Array.isArray(savedState.nodes)) {
+    const hiddenNodeIds = new Set(savedState.hiddenNodeIds ?? []);
+    const hiddenGenerationIds = new Set(savedState.hiddenGenerationIds ?? []);
+
+    return savedState.nodes
+      .filter((node) => !hiddenNodeIds.has(node.id))
+      .filter((node) => {
+        const generationId = getNodeGenerationId(node);
+        return !generationId || !hiddenGenerationIds.has(generationId);
+      })
+      .map(rehydrateDraftNode);
+  }
+
+  // New projects now start with a blank canvas. The user can add pipelines,
+  // image blocks, or text blocks from the Add menu or by dropping/pasting.
+  return [];
 }
 
 export function RenderFlowEditor({ projectId, sessionId }: RenderFlowEditorProps) {
   const router = useRouter();
   const refinePrompt = useRefineFlowPrompt();
   const createImageGeneration = useCreateFlowImageGeneration();
+  const keepGenerationOutput = useKeepGenerationOutput();
   const retryGeneration = useRetryGeneration();
   const cancelGeneration = useCancelGeneration();
   const chatGPTStatus = useChatGPTStatus();
@@ -832,6 +837,7 @@ export function RenderFlowEditor({ projectId, sessionId }: RenderFlowEditorProps
   const initializedRef = useRef(false);
   const referenceDropPointRef = useRef({ x: 360, y: 720 });
   const referenceTargetGeneratorRef = useRef<string | null>(null);
+  const clipboardPastePointRef = useRef<{ x: number; y: number } | null>(null);
   const undoStackRef = useRef<FlowHistorySnapshot[]>([]);
   const redoStackRef = useRef<FlowHistorySnapshot[]>([]);
   const currentHistorySnapshotRef = useRef<FlowHistorySnapshot | null>(null);
@@ -888,13 +894,13 @@ export function RenderFlowEditor({ projectId, sessionId }: RenderFlowEditorProps
   }, [nodes]);
 
   const selectedGroupBounds = useMemo(() => {
-    if (selectedNodeIds.length < 2) return null;
+    if (selectedNodeIds.length < 1) return null;
 
     const selectedNodes = selectedNodeIds
       .map((nodeId) => nodeById.get(nodeId))
       .filter((node): node is CanvasNode => Boolean(node));
 
-    if (selectedNodes.length < 2) return null;
+    if (selectedNodes.length < 1) return null;
 
     const padding = 18;
     const left = Math.min(...selectedNodes.map((node) => node.x)) - padding;
@@ -935,157 +941,81 @@ export function RenderFlowEditor({ projectId, sessionId }: RenderFlowEditorProps
 
     if (!initializedRef.current) {
       initializedRef.current = true;
-      const initial = makeInitialNodes(flowData);
-
-      const saved = window.localStorage.getItem(`eskander-flow-layout:${projectId}:${sessionId}`);
-      let hydrated = initial;
-
-      if (saved) {
-        try {
-          const parsed = JSON.parse(saved) as {
-            camera?: Camera;
-            positions?: Record<string, { x: number; y: number }>;
-            draftNodes?: CanvasNode[];
-            hiddenGenerationIds?: string[];
-            hiddenNodeIds?: string[];
-          };
-
-          if (parsed.camera) setCamera(parsed.camera);
-          if (Array.isArray(parsed.hiddenGenerationIds)) {
-            setHiddenGenerationIds(parsed.hiddenGenerationIds);
-            hydrated = hydrated.filter((node) => {
-              const generationId = getNodeGenerationId(node);
-              return !generationId || !parsed.hiddenGenerationIds!.includes(generationId);
-            });
-          }
-          if (Array.isArray(parsed.hiddenNodeIds)) {
-            setHiddenNodeIds(parsed.hiddenNodeIds);
-            const hiddenNodes = new Set(parsed.hiddenNodeIds);
-            hydrated = hydrated.filter((node) => !hiddenNodes.has(node.id));
-          }
-          if (Array.isArray(parsed.draftNodes) && parsed.draftNodes.length > 0) {
-            hydrated = mergeSavedDraftNodes(hydrated, parsed.draftNodes);
-          }
-          if (parsed.positions) {
-            for (const node of hydrated) {
-              const position = parsed.positions[node.id];
-              if (position) {
-                node.x = position.x;
-                node.y = position.y;
-              }
-            }
-          }
-        } catch {
-          // A stale layout should never block the flow editor.
-        }
-      }
-
-      setNodes(hydrated);
+      const persisted = flowData.session.flowState as {
+        camera?: Camera;
+        nodes?: CanvasNode[];
+        hiddenNodeIds?: string[];
+        hiddenGenerationIds?: string[];
+      } | null | undefined;
+      if (persisted?.camera) setCamera(persisted.camera);
+      setHiddenNodeIds(Array.isArray(persisted?.hiddenNodeIds) ? persisted!.hiddenNodeIds! : []);
+      setHiddenGenerationIds(Array.isArray(persisted?.hiddenGenerationIds) ? persisted!.hiddenGenerationIds! : []);
+      setNodes(makeInitialNodes(flowData));
       return;
     }
 
+    // Only synchronize generations that are already represented by a generator
+    // node. Historical generations never create additional blocks.
     suppressNextHistoryRef.current = true;
-    setNodes((current) => {
-      const representedGenerationIds = new Set<string>();
-      for (const node of current) {
-        const generationId =
-          node.kind === "TEXT"
-            ? (node.data as TextNodeData).generationId
-            : node.kind === "ASSISTANT"
-              ? (node.data as AssistantNodeData).generationId
-              : node.kind === "IMAGE_GENERATOR"
-                ? (node.data as GeneratorNodeData).generationId
-                : (node.data as ImageNodeData).generationId;
-        if (generationId) representedGenerationIds.add(generationId);
-      }
-
-      const synced = current.map((node) => {
-        const generationId =
-          node.kind === "TEXT"
-            ? (node.data as TextNodeData).generationId
-            : node.kind === "ASSISTANT"
-              ? (node.data as AssistantNodeData).generationId
-              : node.kind === "IMAGE_GENERATOR"
-                ? (node.data as GeneratorNodeData).generationId
-                : (node.data as ImageNodeData).generationId;
-
-        if (!generationId) return node;
-        const generation = generationById.get(generationId);
+    setNodes((current) =>
+      current.map((node) => {
+        if (node.kind !== "IMAGE_GENERATOR") return node;
+        const data = node.data as GeneratorNodeData;
+        if (!data.generationId) return node;
+        const generation = generationById.get(data.generationId);
         if (!generation) return node;
+        return {
+          ...node,
+          data: {
+            ...data,
+            status: generation.status,
+            progressMessage: generation.progressMessage,
+            errorMessage: generation.errorMessage,
+            outputAsset: generation.outputAsset,
+            imageProvider: generation.imageProvider === "CHATGPT_BROWSER" ? "CHATGPT_BROWSER" : data.imageProvider,
+            keepOutput: Boolean(generation.keepOutput),
+          } satisfies GeneratorNodeData,
+        };
+      }),
+    );
+  }, [flowData, generationById]);
 
-        if (node.kind === "TEXT") {
-          return {
-            ...node,
-            data: {
-              ...(node.data as TextNodeData),
-              text: generation.userInstruction,
-            },
-          };
-        }
+  const persistCanvasState = useCallback(
+    (
+      nextNodes: CanvasNode[],
+      nextCamera: Camera = camera,
+      nextHiddenGenerationIds: string[] = hiddenGenerationIds,
+      nextHiddenNodeIds: string[] = hiddenNodeIds,
+    ) => {
+      const persistedNodes = nextNodes
+        .map(serializeDraftNode)
+        .filter((node): node is CanvasNode => Boolean(node));
 
-        if (node.kind === "ASSISTANT") {
-          const previous = node.data as AssistantNodeData;
-          return {
-            ...node,
-            data: {
-              ...previous,
-              outputText: generation.refinedPrompt ?? previous.outputText,
-              state: generation.refinedPrompt ? "READY" : previous.state,
-              errorMessage: generation.refinedPrompt ? null : previous.errorMessage,
-            },
-          };
-        }
-
-        if (node.kind === "IMAGE_GENERATOR") {
-          return {
-            ...node,
-            data: {
-              ...(node.data as GeneratorNodeData),
-              status: generation.status,
-              progressMessage: generation.progressMessage,
-              errorMessage: generation.errorMessage,
-              outputAsset: generation.outputAsset,
-            },
-          };
-        }
-
-        return node;
+      return apiPatch<null>(`/api/projects/${projectId}/image-sessions/${sessionId}/flow`, {
+        state: {
+          version: 4,
+          camera: nextCamera,
+          nodes: persistedNodes,
+          hiddenGenerationIds: [...new Set(nextHiddenGenerationIds)],
+          hiddenNodeIds: [...new Set(nextHiddenNodeIds)],
+          updatedAt: new Date().toISOString(),
+        },
       });
-
-      const hidden = new Set(hiddenGenerationIds);
-      const hiddenNodes = new Set(hiddenNodeIds);
-      const missing = visibleFlowGenerations.filter(
-        (generation) => !representedGenerationIds.has(generation.id) && !hidden.has(generation.id),
-      );
-      if (missing.length === 0) return dedupeFlowImageNodes(synced);
-
-      const baseIndex = visibleFlowGenerations.length - missing.length;
-      return dedupeFlowImageNodes([
-        ...synced,
-        ...missing
-          .flatMap((generation, index) => makeGenerationNodes(generation, baseIndex + index))
-          .filter((node) => !hiddenNodes.has(node.id)),
-      ]);
-    });
-  }, [flowData, generationById, hiddenGenerationIds, hiddenNodeIds, projectId, sessionId, visibleFlowGenerations]);
+    },
+    [camera, hiddenGenerationIds, hiddenNodeIds, projectId, sessionId],
+  );
 
   useEffect(() => {
     if (!initializedRef.current) return;
 
-    const id = window.setTimeout(() => {
-      const positions = Object.fromEntries(nodes.map((node) => [node.id, { x: node.x, y: node.y }]));
-      const draftNodes = nodes
-        .map(serializeDraftNode)
-        .filter((node): node is CanvasNode => Boolean(node));
+    const timer = window.setTimeout(() => {
+      void persistCanvasState(nodes).catch((persistError) => {
+        console.warn("Could not persist canvas state:", persistError);
+      });
+    }, 350);
 
-      window.localStorage.setItem(
-        `eskander-flow-layout:${projectId}:${sessionId}`,
-        JSON.stringify({ camera, positions, draftNodes, hiddenGenerationIds, hiddenNodeIds }),
-      );
-    }, 250);
-
-    return () => window.clearTimeout(id);
-  }, [camera, hiddenGenerationIds, hiddenNodeIds, nodes, projectId, sessionId]);
+    return () => window.clearTimeout(timer);
+  }, [camera, hiddenGenerationIds, hiddenNodeIds, nodes, persistCanvasState]);
 
   useEffect(() => {
     if (!initializedRef.current) return;
@@ -1319,32 +1249,33 @@ export function RenderFlowEditor({ projectId, sessionId }: RenderFlowEditorProps
 
       const commandKey = event.ctrlKey || event.metaKey;
       const lowerKey = event.key.toLowerCase();
-      if (commandKey && !event.altKey && !isEditing && lowerKey === "z") {
+      const code = event.code;
+      if (commandKey && !event.altKey && !isEditing && code === "KeyZ") {
         event.preventDefault();
         if (event.shiftKey) redoFlow();
         else undoFlow();
         return;
       }
 
-      if (commandKey && !event.altKey && !event.shiftKey && !isEditing && lowerKey === "y") {
+      if (commandKey && !event.altKey && !event.shiftKey && !isEditing && code === "KeyY") {
         event.preventDefault();
         redoFlow();
         return;
       }
 
-      if (commandKey && !event.altKey && !event.shiftKey && !isEditing && lowerKey === "c") {
+      if (commandKey && !event.altKey && !event.shiftKey && !isEditing && code === "KeyC") {
         event.preventDefault();
-        void copyWorkflowToClipboard();
+        void copySelectedNodesToClipboard();
         return;
       }
 
-      if (commandKey && !event.altKey && !event.shiftKey && !isEditing && lowerKey === "v") {
+      if (commandKey && !event.altKey && !event.shiftKey && !isEditing && code === "KeyV") {
         event.preventDefault();
-        void pasteWorkflowFromClipboard();
+        void pasteFromKeyboardShortcut();
         return;
       }
 
-      if (commandKey && !event.altKey && !event.shiftKey && !isEditing && lowerKey === "r") {
+      if (commandKey && !event.altKey && !event.shiftKey && !isEditing && code === "KeyR") {
         event.preventDefault();
         void runSelectedWorkflow();
         return;
@@ -1382,6 +1313,42 @@ export function RenderFlowEditor({ projectId, sessionId }: RenderFlowEditorProps
   });
 
   useEffect(() => {
+    if (!pendingConnection) return;
+
+    function finishConnection(event: PointerEvent) {
+      // Mouse/pointer release always ends the drag. A compatible input may
+      // consume it below; empty or incompatible space simply cancels it.
+      setPendingConnection(null);
+      const hit = document.elementFromPoint(event.clientX, event.clientY) as HTMLElement | null;
+      const port = hit?.closest<HTMLElement>("[data-flow-input-node]");
+
+      if (port) {
+        const targetNodeId = port.dataset.flowInputNode;
+        const targetLabel = port.dataset.flowInputLabel ?? "";
+        const targetNode = targetNodeId ? nodeById.get(targetNodeId) : null;
+
+        if (targetNode?.kind === "ASSISTANT") {
+          connectAssistantText(targetNode.id);
+          return;
+        }
+        if (targetNode?.kind === "IMAGE_GENERATOR") {
+          if (targetLabel.startsWith("Source")) connectGeneratorInput(targetNode.id, "SOURCE");
+          else if (targetLabel.startsWith("Reference")) connectGeneratorInput(targetNode.id, "REFERENCE");
+          else connectGeneratorInput(targetNode.id, "PROMPT");
+          return;
+        }
+      }
+
+      // Releasing anywhere except a compatible input cancels the wire.
+      setPendingConnection(null);
+      setError(null);
+    }
+
+    window.addEventListener("pointerup", finishConnection, { once: true });
+    return () => window.removeEventListener("pointerup", finishConnection);
+  }, [pendingConnection, nodeById]);
+
+  useEffect(() => {
     if (!toast) return;
     const timer = window.setTimeout(() => setToast(null), 2200);
     return () => window.clearTimeout(timer);
@@ -1400,6 +1367,148 @@ export function RenderFlowEditor({ projectId, sessionId }: RenderFlowEditorProps
       void prepareGeneratorImageDrag(asset);
     }
   }, [nodes]);
+
+  async function uploadFlowImage(file: File) {
+    const formData = new FormData();
+    formData.append("image", file);
+    return apiUpload<Asset>(`/api/projects/${projectId}/image-sessions/${sessionId}/flow/images`, formData);
+  }
+
+  async function createImageNodesFromUrls(urls: string[], worldX: number, worldY: number) {
+    const imageUrls = urls.filter((url) => /^https?:\/\//i.test(url) || url.startsWith("data:image/"));
+    if (imageUrls.length === 0) return [] as CanvasNode[];
+
+    setWorkflowBusyLabel(imageUrls.length === 1 ? "Importing image..." : `Importing ${imageUrls.length} images...`);
+    try {
+      const files: File[] = [];
+      for (const url of imageUrls.slice(0, 5)) {
+        const response = await fetch(url);
+        if (!response.ok) continue;
+        const blob = await response.blob();
+        if (!blob.type.startsWith("image/")) continue;
+        const extension = blob.type === "image/jpeg" ? "jpg" : blob.type.split("/")[1] ?? "png";
+        files.push(new File([blob], `dropped-image-${Date.now()}-${files.length + 1}.${extension}`, { type: blob.type }));
+      }
+      if (files.length === 0) return [] as CanvasNode[];
+      return createImageNodesFromFiles(files, worldX, worldY);
+    } finally {
+      setWorkflowBusyLabel(null);
+    }
+  }
+
+  function extractImageUrlsFromDataTransfer(dataTransfer: DataTransfer) {
+    const urls: string[] = [];
+    const uriList = dataTransfer.getData("text/uri-list");
+    if (uriList) {
+      urls.push(...uriList.split(/\r?\n/).map((line) => line.trim()).filter((line) => line && !line.startsWith("#")));
+    }
+
+    const html = dataTransfer.getData("text/html");
+    if (html) {
+      const matches = Array.from(html.matchAll(/<img[^>]+src=["']([^"']+)["']/gi));
+      urls.push(...matches.map((match) => match[1]).filter((url): url is string => Boolean(url)));
+    }
+
+    const textValue = dataTransfer.getData("text/plain").trim();
+    if (/^(https?:\/\/|data:image\/)/i.test(textValue)) urls.push(textValue);
+
+    return [...new Set(urls)];
+  }
+
+  async function createImageNodesFromFiles(files: File[], worldX: number, worldY: number) {
+    const accepted = files.filter((file) => isSupportedImageFile(file));
+    if (accepted.length === 0) {
+      setError("Choose a PNG, JPG, or WEBP image.");
+      return [] as CanvasNode[];
+    }
+
+    setWorkflowBusyLabel(accepted.length === 1 ? "Uploading image..." : `Uploading ${accepted.length} images...`);
+    try {
+      const assets = await Promise.all(accepted.map((file) => uploadFlowImage(file)));
+      const existingImageCount = nodesRef.current.filter((node) => node.kind === "IMAGE").length;
+      const created = assets.map((asset, index) => {
+        const id = `flow-input-${asset.id}`;
+        const position = findFreeNodePosition(worldX + index * 28, worldY + index * 22, IMAGE_SIZE.width, IMAGE_SIZE.height);
+        return makeImageNode({
+          id,
+          x: position.x,
+          y: position.y,
+          title: imageTitle(existingImageCount + index + 1, "IMAGE"),
+          asset,
+          role: "IMAGE",
+        });
+      });
+      setNodes((current) => [...current, ...created]);
+      if (created.length > 0) setSelectedNodeIds(created.map((node) => node.id));
+      await flowQuery.refetch();
+      return created;
+    } finally {
+      setWorkflowBusyLabel(null);
+    }
+  }
+
+  function resolveGeneratorDropInput(generator: CanvasNode, worldY: number): GeneratorInput {
+    const localY = worldY - generator.y;
+    if (localY <= 145) return "PROMPT";
+    if (localY <= 195) return "SOURCE";
+    return "REFERENCE";
+  }
+
+  async function attachImageNodeToGenerator(generatorId: string, imageNodeId: string, preferredInput?: GeneratorInput) {
+    const generator = nodeById.get(generatorId);
+    if (!generator || generator.kind !== "IMAGE_GENERATOR") return;
+    const input = preferredInput && preferredInput !== "PROMPT"
+      ? preferredInput
+      : ((generator.data as GeneratorNodeData).sourceNodeId ? "REFERENCE" : "SOURCE");
+
+    if (input === "SOURCE") {
+      updateNode<GeneratorNodeData>(generatorId, (current) => ({ ...current, sourceNodeId: imageNodeId }));
+      return;
+    }
+
+    updateNode<GeneratorNodeData>(generatorId, (current) => ({
+      ...current,
+      referenceNodeIds: [...new Set([...current.referenceNodeIds, imageNodeId])].slice(0, 5),
+    }));
+  }
+
+  async function createPromptNodeAndAttachToGenerator(generatorId: string, promptText: string) {
+    const generator = nodeById.get(generatorId);
+    if (!generator || generator.kind !== "IMAGE_GENERATOR") return;
+    const id = createTextNode(generator.x - 470, generator.y - 10, promptText.trim());
+    updateNode<GeneratorNodeData>(generatorId, (current) => ({ ...current, promptNodeId: id }));
+  }
+
+  useEffect(() => {
+    async function handlePaste(event: ClipboardEvent) {
+      const target = event.target as HTMLElement | null;
+      const tagName = target?.tagName;
+      const isEditing = tagName === "TEXTAREA" || tagName === "INPUT" || tagName === "SELECT" || Boolean(target?.isContentEditable);
+      if (isEditing) return;
+
+      const items = Array.from(event.clipboardData?.items ?? []);
+      const files = items
+        .filter((item) => isImageTransferItem(item))
+        .map((item) => item.getAsFile())
+        .filter((file): file is File => Boolean(file));
+
+      if (files.length === 0) return;
+
+      event.preventDefault();
+      const point = clipboardPastePointRef.current ?? screenToWorld(window.innerWidth / 2, window.innerHeight / 2);
+      try {
+        await createImageNodesFromFiles(files, point.x, point.y);
+        setToast(files.length === 1 ? "Image pasted" : `${files.length} images pasted`);
+      } catch (pasteError) {
+        setError(pasteError instanceof Error ? pasteError.message : "Could not paste the image.");
+      }
+    }
+
+    window.addEventListener("paste", handlePaste);
+    return () => {
+      window.removeEventListener("paste", handlePaste);
+    };
+  }, [flowQuery, screenToWorld]);
 
   const edges = useMemo(() => {
     const result: CanvasEdge[] = [];
@@ -1451,33 +1560,8 @@ export function RenderFlowEditor({ projectId, sessionId }: RenderFlowEditorProps
   }, [nodes]);
 
   function getWorkflowNodeIdsFromSelectionOrAll() {
-    if (selectedNodeIds.length === 0) {
-      return nodes.map((node) => node.id);
-    }
-
-    const adjacency = new Map<string, Set<string>>();
-    nodes.forEach((node) => adjacency.set(node.id, new Set<string>()));
-
-    edges.forEach((edge) => {
-      adjacency.get(edge.fromId)?.add(edge.toId);
-      adjacency.get(edge.toId)?.add(edge.fromId);
-    });
-
-    const queue = [...selectedNodeIds.filter((nodeId) => nodeById.has(nodeId))];
-    const visited = new Set<string>();
-
-    while (queue.length > 0) {
-      const nodeId = queue.shift();
-      if (!nodeId || visited.has(nodeId)) continue;
-      visited.add(nodeId);
-      const neighbors = adjacency.get(nodeId);
-      if (!neighbors) continue;
-      neighbors.forEach((neighborId) => {
-        if (!visited.has(neighborId)) queue.push(neighborId);
-      });
-    }
-
-    return visited.size > 0 ? nodes.filter((node) => visited.has(node.id)).map((node) => node.id) : nodes.map((node) => node.id);
+    const selected = selectedNodeIds.filter((nodeId) => nodeById.has(nodeId));
+    return selected.length > 0 ? selected : nodes.map((node) => node.id);
   }
 
   async function createWorkflowPayload(nodeIds: string[]) {
@@ -1578,6 +1662,7 @@ export function RenderFlowEditor({ projectId, sessionId }: RenderFlowEditorProps
             ].slice(0, 5),
             preserveMode: data.preserveMode,
             preserveEverythingElse: data.preserveEverythingElse,
+            imageProvider: data.imageProvider,
           },
         } satisfies WorkflowTransferNode;
       }
@@ -1607,6 +1692,161 @@ export function RenderFlowEditor({ projectId, sessionId }: RenderFlowEditorProps
       originSessionId: sessionId,
       nodes: exportedNodes,
     } satisfies WorkflowTransferPayload;
+  }
+
+  function makeClipboardNode(node: CanvasNode): CanvasNode {
+    if (node.kind === "TEXT") {
+      const data = node.data as TextNodeData;
+      return { ...node, data: { ...data, generationId: undefined } };
+    }
+
+    if (node.kind === "ASSISTANT") {
+      const data = node.data as AssistantNodeData;
+      return {
+        ...node,
+        data: {
+          ...data,
+          generationId: undefined,
+          state: data.outputText ? "READY" : "IDLE",
+          errorMessage: null,
+        },
+      };
+    }
+
+    if (node.kind === "IMAGE_GENERATOR") {
+      const data = node.data as GeneratorNodeData;
+      return {
+        ...node,
+        data: {
+          ...data,
+          generationId: undefined,
+          keepOutput: false,
+          status: "IDLE",
+          progressMessage: null,
+          errorMessage: null,
+          outputAsset: null,
+        },
+      };
+    }
+
+    const data = node.data as ImageNodeData;
+    return {
+      ...node,
+      data: {
+        ...data,
+        localFile: undefined,
+      },
+    };
+  }
+
+  async function copySelectedNodesToClipboard() {
+    const selectedSet = new Set(selectedNodeIds);
+    const selected = nodesRef.current.filter((node) => selectedSet.has(node.id));
+    if (selected.length === 0) {
+      setToast("Select one or more elements to copy.");
+      return;
+    }
+
+    try {
+      const payload = selected.map(makeClipboardNode);
+      window.localStorage.setItem(NODE_CLIPBOARD_KEY, JSON.stringify(payload));
+      setToast(selected.length === 1 ? "Element copied" : `${selected.length} elements copied`);
+    } catch (copyError) {
+      setError(copyError instanceof Error ? copyError.message : "Could not copy the selected elements.");
+    }
+  }
+
+  async function pasteImageFilesFromSystemClipboard() {
+    if (!navigator.clipboard?.read) return false;
+
+    try {
+      const clipboardItems = await navigator.clipboard.read();
+      const files: File[] = [];
+
+      for (const item of clipboardItems) {
+        const imageType = item.types.find((type) => ["image/png", "image/jpeg", "image/webp"].includes(type));
+        if (!imageType) continue;
+        const blob = await item.getType(imageType);
+        const extension = imageType === "image/jpeg" ? "jpg" : imageType.split("/")[1] ?? "png";
+        files.push(new File([blob], `clipboard-image-${Date.now()}-${files.length + 1}.${extension}`, { type: imageType }));
+      }
+
+      if (files.length === 0) return false;
+
+      const pastePoint = clipboardPastePointRef.current ?? screenToWorld(window.innerWidth / 2, window.innerHeight / 2);
+      await createImageNodesFromFiles(files, pastePoint.x, pastePoint.y);
+      setToast(files.length === 1 ? "Image pasted" : `${files.length} images pasted`);
+      return true;
+    } catch (clipboardError) {
+      console.warn("Could not read images from system clipboard:", clipboardError);
+      return false;
+    }
+  }
+
+  async function pasteFromKeyboardShortcut() {
+    const pastedImage = await pasteImageFilesFromSystemClipboard();
+    if (pastedImage) return;
+    await pasteSelectedNodesFromClipboard();
+  }
+
+  async function pasteSelectedNodesFromClipboard() {
+    const raw = window.localStorage.getItem(NODE_CLIPBOARD_KEY);
+    if (!raw) {
+      setToast("Nothing copied yet.");
+      return;
+    }
+
+    try {
+      const sourceNodes = JSON.parse(raw) as CanvasNode[];
+      if (!Array.isArray(sourceNodes) || sourceNodes.length === 0) throw new Error("The copied elements are invalid.");
+
+      const copiedIds = new Set(sourceNodes.map((node) => node.id));
+      const idMap = new Map<string, string>();
+      sourceNodes.forEach((node) => idMap.set(node.id, `draft-${node.kind.toLowerCase()}-${crypto.randomUUID()}`));
+      const remap = (id: string | null | undefined) => (id && copiedIds.has(id) ? idMap.get(id) ?? null : null);
+
+      const bounds = computeNodeBounds(sourceNodes);
+      const pastePoint = clipboardPastePointRef.current;
+      const offsetX = pastePoint
+        ? pastePoint.x - bounds.left
+        : Math.min(120, Math.max(42, bounds.width * 0.08));
+      const offsetY = pastePoint
+        ? pastePoint.y - bounds.top
+        : Math.min(120, Math.max(42, bounds.height * 0.08));
+
+      const pasted = sourceNodes.map((source): CanvasNode => {
+        const node = makeClipboardNode(source);
+        const id = idMap.get(source.id)!;
+        let data = node.data;
+
+        if (node.kind === "ASSISTANT") {
+          const current = data as AssistantNodeData;
+          data = { ...current, textNodeId: remap(current.textNodeId) };
+        } else if (node.kind === "IMAGE_GENERATOR") {
+          const current = data as GeneratorNodeData;
+          data = {
+            ...current,
+            promptNodeId: remap(current.promptNodeId),
+            sourceNodeId: remap(current.sourceNodeId),
+            referenceNodeIds: current.referenceNodeIds.map((refId) => remap(refId)).filter((refId): refId is string => Boolean(refId)),
+          };
+        }
+
+        return {
+          ...node,
+          id,
+          x: clamp(node.x + offsetX, 24, WORLD_WIDTH - node.width - 24),
+          y: clamp(node.y + offsetY, 24, WORLD_HEIGHT - node.height - 24),
+          data,
+        };
+      });
+
+      setNodes((current) => [...current, ...pasted]);
+      setSelectedNodeIds(pasted.map((node) => node.id));
+      setToast(pasted.length === 1 ? "Element pasted" : `${pasted.length} elements pasted`);
+    } catch (pasteError) {
+      setError(pasteError instanceof Error ? pasteError.message : "Could not paste the copied elements.");
+    }
   }
 
   async function copyWorkflowToClipboard() {
@@ -1817,6 +2057,8 @@ export function RenderFlowEditor({ projectId, sessionId }: RenderFlowEditorProps
               .slice(0, 5),
             preserveMode: node.data.preserveMode,
             preserveEverythingElse: node.data.preserveEverythingElse,
+            imageProvider: node.data.imageProvider ?? "GEMINI_BROWSER",
+            keepOutput: false,
             status: "DRAFT",
             progressMessage: null,
             errorMessage: null,
@@ -1887,13 +2129,8 @@ export function RenderFlowEditor({ projectId, sessionId }: RenderFlowEditorProps
     replaceImageInputRef.current?.click();
   }
 
-  async function handleReplaceImageFile(files: FileList | null) {
-    const file = files?.[0];
-    const targetNodeId = replaceImageTargetNodeIdRef.current;
-    replaceImageTargetNodeIdRef.current = null;
-
-    if (!file || !targetNodeId) return;
-    if (!["image/png", "image/jpeg", "image/webp"].includes(file.type)) {
+  async function replaceImageNodeWithFile(targetNodeId: string, file: File) {
+    if (!isSupportedImageFile(file)) {
       setError("Choose a PNG, JPG, or WEBP image.");
       return;
     }
@@ -1904,7 +2141,6 @@ export function RenderFlowEditor({ projectId, sessionId }: RenderFlowEditorProps
       const formData = new FormData();
       formData.append("image", file);
       const asset = await apiUpload<Asset>(`/api/projects/${projectId}/image-sessions/${sessionId}/flow/images`, formData);
-      setHiddenNodeIds((current) => [...new Set([...current, `flow-input-${asset.id}`])]);
 
       setNodes((current) =>
         current.map((node) => {
@@ -1926,14 +2162,23 @@ export function RenderFlowEditor({ projectId, sessionId }: RenderFlowEditorProps
         }),
       );
 
+      setToast("Image replaced");
       await flowQuery.refetch();
-      setToast("Image replaced. Run Flow to execute the duplicated workflow on it.");
     } catch (replaceError) {
       setError(replaceError instanceof Error ? replaceError.message : "Could not replace the image.");
     } finally {
       setWorkflowBusyLabel(null);
     }
   }
+
+  async function handleReplaceImageFile(files: FileList | null) {
+    const file = files?.[0];
+    const targetNodeId = replaceImageTargetNodeIdRef.current;
+    replaceImageTargetNodeIdRef.current = null;
+    if (!file || !targetNodeId) return;
+    await replaceImageNodeWithFile(targetNodeId, file);
+  }
+
 
   function getWorkflowGeneratorOrder(workflowNodeIds: string[]) {
     const workflowSet = new Set(workflowNodeIds);
@@ -2020,7 +2265,7 @@ export function RenderFlowEditor({ projectId, sessionId }: RenderFlowEditorProps
       await sleep(1500);
     }
 
-    throw new Error("The workflow timed out while waiting for Gemini to finish.");
+    throw new Error("The workflow timed out while waiting for image generation to finish.");
   }
 
   function detachTemplateExecution(generatorNodeId: string, outputAsset: Asset) {
@@ -2098,13 +2343,15 @@ export function RenderFlowEditor({ projectId, sessionId }: RenderFlowEditorProps
         }
 
         const generatorData = liveGenerator.data as GeneratorNodeData;
-        const assistantNode = generatorData.promptNodeId ? nodesRef.current.find((node) => node.id === generatorData.promptNodeId) : null;
+        const promptNode = generatorData.promptNodeId ? nodesRef.current.find((node) => node.id === generatorData.promptNodeId) : null;
 
-        if (!assistantNode || assistantNode.kind !== "ASSISTANT") {
-          throw new Error(`${generatorData.title} is missing its Assistant node.`);
+        if (!promptNode || (promptNode.kind !== "ASSISTANT" && promptNode.kind !== "TEXT")) {
+          throw new Error(`${generatorData.title} is missing its prompt node.`);
         }
 
-        const refinedPrompt = await runAssistantWithContext(assistantNode, liveGenerator);
+        const refinedPrompt = promptNode.kind === "ASSISTANT"
+          ? await runAssistantWithContext(promptNode, liveGenerator)
+          : (promptNode.data as TextNodeData).text.trim();
         if (!refinedPrompt) {
           throw new Error(`Could not prepare the prompt for ${generatorData.title}.`);
         }
@@ -2114,8 +2361,7 @@ export function RenderFlowEditor({ projectId, sessionId }: RenderFlowEditorProps
           throw new Error(`Could not start ${generatorData.title}.`);
         }
 
-        const outputAsset = await waitForGeneratorToFinish(generationId, liveGenerator.id);
-        detachTemplateExecution(liveGenerator.id, outputAsset);
+        await waitForGeneratorToFinish(generationId, liveGenerator.id);
       }
 
       setToast(`Workflow completed. ${generatorOrder.length} generation step${generatorOrder.length === 1 ? "" : "s"} finished.`);
@@ -2205,6 +2451,7 @@ export function RenderFlowEditor({ projectId, sessionId }: RenderFlowEditorProps
 
     setAddMenu(null);
     const world = screenToWorld(event.clientX, event.clientY);
+    clipboardPastePointRef.current = world;
 
     if (
       !event.shiftKey &&
@@ -2316,7 +2563,6 @@ export function RenderFlowEditor({ projectId, sessionId }: RenderFlowEditorProps
         if (data.localFile) URL.revokeObjectURL(data.previewUrl);
       }
     }
-    window.localStorage.removeItem(`eskander-flow-layout:${projectId}:${sessionId}`);
     setHiddenGenerationIds([]);
     setHiddenNodeIds([]);
     setNodes(makeInitialNodes(flowData));
@@ -2324,7 +2570,7 @@ export function RenderFlowEditor({ projectId, sessionId }: RenderFlowEditorProps
     setSelectedNodeId(null);
   }
 
-  function startConnection(event: ReactMouseEvent, node: CanvasNode, outputType: OutputType) {
+  function startConnection(event: ReactMouseEvent | ReactPointerEvent, node: CanvasNode, outputType: OutputType) {
     event.preventDefault();
     event.stopPropagation();
     setSelectedNodeId(node.id);
@@ -2359,8 +2605,8 @@ export function RenderFlowEditor({ projectId, sessionId }: RenderFlowEditorProps
     if (!source) return;
 
     if (input === "PROMPT") {
-      if (source.kind !== "ASSISTANT" || pendingConnection.outputType !== "TEXT") {
-        setError("Image Generator prompt must come from an Assistant node.");
+      if ((source.kind !== "ASSISTANT" && source.kind !== "TEXT") || pendingConnection.outputType !== "TEXT") {
+        setError("Image Generator prompt must come from a Text or Assistant node.");
         return;
       }
       updateNode<GeneratorNodeData>(generatorId, (data) => ({ ...data, promptNodeId: source.id }));
@@ -2377,7 +2623,7 @@ export function RenderFlowEditor({ projectId, sessionId }: RenderFlowEditorProps
 
       if (input === "SOURCE") {
         if (source.kind === "IMAGE" && !(source.data as ImageNodeData).asset) {
-          setError("Uploaded reference nodes are reference-only. Use a saved render version as the Source image.");
+          setError("This node is reference-only. Add or duplicate an image node with the Source role instead.");
           return;
         }
         updateNode<GeneratorNodeData>(generatorId, (data) => ({ ...data, sourceNodeId: source.id }));
@@ -2475,7 +2721,7 @@ export function RenderFlowEditor({ projectId, sessionId }: RenderFlowEditorProps
     return { x: candidateX, y: candidateY };
   }
 
-  function createTextNode(x: number, y: number) {
+  function createTextNode(x: number, y: number, initialText = "") {
     const id = `draft-text-${crypto.randomUUID()}`;
     const position = findFreeNodePosition(x, y, TEXT_SIZE.width, TEXT_SIZE.height);
     setNodes((current) => [
@@ -2487,7 +2733,7 @@ export function RenderFlowEditor({ projectId, sessionId }: RenderFlowEditorProps
         y: position.y,
         width: TEXT_SIZE.width,
         height: TEXT_SIZE.height,
-        data: { title: nextTitle("TEXT"), text: "" } satisfies TextNodeData,
+        data: { title: nextTitle("TEXT"), text: initialText } satisfies TextNodeData,
       },
     ]);
     setSelectedNodeId(id);
@@ -2539,6 +2785,8 @@ export function RenderFlowEditor({ projectId, sessionId }: RenderFlowEditorProps
           referenceNodeIds: [],
           preserveMode: "STRICT",
           preserveEverythingElse: true,
+          imageProvider: "GEMINI_BROWSER",
+          keepOutput: false,
           status: "DRAFT",
           progressMessage: null,
           errorMessage: null,
@@ -2550,13 +2798,33 @@ export function RenderFlowEditor({ projectId, sessionId }: RenderFlowEditorProps
     return id;
   }
 
-  function createPipeline(x: number, y: number, preferredSourceNodeId: string | null = null) {
-    const latestGenerator = [...nodes]
-      .reverse()
-      .find((node) => node.kind === "IMAGE_GENERATOR" && Boolean((node.data as GeneratorNodeData).outputAsset));
+  function createSourceNode(x: number, y: number) {
+    const id = `draft-source-${crypto.randomUUID()}`;
+    const position = findFreeNodePosition(x, y, IMAGE_SIZE.width, IMAGE_SIZE.height);
+    const sourceNumber =
+      nodes.filter((node) => node.kind === "IMAGE" && (node.data as ImageNodeData).role === "SOURCE").length + 1;
+
+    setNodes((current) => [
+      ...current,
+      makeImageNode({
+        id,
+        x: position.x,
+        y: position.y,
+        title: imageTitle(sourceNumber, "SOURCE"),
+        role: "SOURCE",
+      }),
+    ]);
+    setSelectedNodeId(id);
+    return id;
+  }
+
+  function createPipeline(
+    x: number,
+    y: number,
+    preferredSourceNodeId: string | null = null,
+    includeSource = true,
+  ) {
     const preferredSource = preferredSourceNodeId ? nodeById.get(preferredSourceNodeId) ?? null : null;
-    const fallbackSource = nodes.find((node) => node.kind === "IMAGE" && Boolean((node.data as ImageNodeData).asset)) ?? null;
-    const sourceImage = preferredSource ?? latestGenerator ?? fallbackSource;
 
     const rightMostEdge = nodes.length > 0
       ? Math.max(...nodes.map((node) => node.x + node.width))
@@ -2568,35 +2836,43 @@ export function RenderFlowEditor({ projectId, sessionId }: RenderFlowEditorProps
     const desiredY = Math.max(120, Math.min(y, topMostNode + 80));
     const { x: pipelineX, y: pipelineY } = findFreePipelinePosition(desiredX, desiredY);
 
+    const sourceId = `draft-source-${crypto.randomUUID()}`;
     const textId = `draft-text-${crypto.randomUUID()}`;
     const assistantId = `draft-assistant-${crypto.randomUUID()}`;
     const generatorId = `draft-generator-${crypto.randomUUID()}`;
-    const sourceCloneId = `draft-source-${crypto.randomUUID()}`;
     const number = nodes.filter((node) => node.kind === "IMAGE_GENERATOR").length + 1;
-    const nextSourceCount = nodes.filter((node) => node.kind === "IMAGE" && (node.data as ImageNodeData).role === "SOURCE").length + 1;
+    const nextSourceCount = nodes.filter(
+      (node) => node.kind === "IMAGE" && (node.data as ImageNodeData).role === "SOURCE",
+    ).length + 1;
 
-    const clonedSourceAsset =
-      sourceImage?.kind === "IMAGE_GENERATOR"
-        ? (sourceImage.data as GeneratorNodeData).outputAsset ?? null
-        : sourceImage?.kind === "IMAGE"
-          ? (sourceImage.data as ImageNodeData).asset ?? null
-          : null;
-
-    const cloneGeneratedSource = Boolean(preferredSourceNodeId && preferredSource?.kind === "IMAGE_GENERATOR" && clonedSourceAsset);
-    const sourceNodeIdForGenerator = cloneGeneratedSource ? sourceCloneId : sourceImage?.id ?? null;
+    // Source is optional for pipelines created from the Add menu. When enabled,
+    // the pipeline gets its own empty/drop-ready Source Image card (or a copy of
+    // the preferred connected image). The initial project starter pipeline stays
+    // unchanged and always includes its Source Image card.
+    const preferredSourceAsset =
+      preferredSource?.kind === "IMAGE_GENERATOR"
+        ? (preferredSource.data as GeneratorNodeData).outputAsset ?? undefined
+        : preferredSource?.kind === "IMAGE"
+          ? (preferredSource.data as ImageNodeData).asset
+          : undefined;
 
     setNodes((current) => {
       const nextNodes: CanvasNode[] = [...current];
 
-      if (cloneGeneratedSource && clonedSourceAsset) {
-        const sourcePosition = findFreeNodePosition(pipelineX - IMAGE_SIZE.width - 85, pipelineY + 120, IMAGE_SIZE.width, IMAGE_SIZE.height);
+      if (includeSource) {
+        const sourcePosition = findFreeNodePosition(
+          pipelineX,
+          pipelineY + 330,
+          IMAGE_SIZE.width,
+          IMAGE_SIZE.height,
+        );
         nextNodes.push(
           makeImageNode({
-            id: sourceCloneId,
+            id: sourceId,
             x: sourcePosition.x,
             y: sourcePosition.y,
             title: imageTitle(nextSourceCount, "SOURCE"),
-            asset: clonedSourceAsset,
+            asset: preferredSourceAsset,
             role: "SOURCE",
           }),
         );
@@ -2638,10 +2914,12 @@ export function RenderFlowEditor({ projectId, sessionId }: RenderFlowEditorProps
           data: {
             title: `Image Generator #${number}`,
             promptNodeId: assistantId,
-            sourceNodeId: sourceNodeIdForGenerator,
+            sourceNodeId: includeSource ? sourceId : null,
             referenceNodeIds: [],
             preserveMode: "STRICT",
             preserveEverythingElse: true,
+            imageProvider: "GEMINI_BROWSER",
+            keepOutput: false,
             status: "DRAFT",
             progressMessage: null,
             errorMessage: null,
@@ -2653,22 +2931,32 @@ export function RenderFlowEditor({ projectId, sessionId }: RenderFlowEditorProps
       return nextNodes;
     });
 
-    setSelectedNodeId(textId);
+    setSelectedNodeId(includeSource ? sourceId : textId);
     setAddMenu(null);
   }
 
-  function addFromMenu(kind: "TEXT" | "ASSISTANT" | "IMAGE_GENERATOR" | "REFERENCE" | "PIPELINE") {
+  function addFromMenu(
+    kind:
+      | "TEXT"
+      | "ASSISTANT"
+      | "IMAGE_GENERATOR"
+      | "REFERENCE"
+      | "SOURCE"
+      | "PIPELINE_WITHOUT_SOURCE",
+  ) {
     if (!addMenu) return;
     const { worldX, worldY, pending } = addMenu;
 
-    if (kind === "PIPELINE") {
-      const source = pending ? nodeById.get(pending.fromNodeId) : null;
-      const preferredSourceNodeId =
-        pending?.outputType === "IMAGE" && (source?.kind === "IMAGE" || source?.kind === "IMAGE_GENERATOR")
-          ? source.id
-          : null;
-      createPipeline(worldX, worldY, preferredSourceNodeId);
+    if (kind === "PIPELINE_WITHOUT_SOURCE") {
+      createPipeline(worldX, worldY, null, false);
       setPendingConnection(null);
+      return;
+    }
+
+    if (kind === "SOURCE") {
+      createSourceNode(worldX, worldY);
+      setPendingConnection(null);
+      setAddMenu(null);
       return;
     }
 
@@ -2695,7 +2983,7 @@ export function RenderFlowEditor({ projectId, sessionId }: RenderFlowEditorProps
 
     if (kind === "IMAGE_GENERATOR") {
       const source = pending ? nodeById.get(pending.fromNodeId) : null;
-      const promptNodeId = source?.kind === "ASSISTANT" && pending?.outputType === "TEXT" ? source.id : null;
+      const promptNodeId = (source?.kind === "ASSISTANT" || source?.kind === "TEXT") && pending?.outputType === "TEXT" ? source.id : null;
       const sourceNodeId =
         (source?.kind === "IMAGE" || source?.kind === "IMAGE_GENERATOR") && pending?.outputType === "IMAGE"
           ? source.id
@@ -2734,7 +3022,7 @@ export function RenderFlowEditor({ projectId, sessionId }: RenderFlowEditorProps
       : 0;
     const room = Math.max(0, 5 - currentReferenceCount);
     const accepted = Array.from(files)
-      .filter((file) => ["image/jpeg", "image/png", "image/webp"].includes(file.type))
+      .filter((file) => isSupportedImageFile(file))
       .slice(0, targetGeneratorId ? room : 5);
 
     if (accepted.length === 0) {
@@ -2929,31 +3217,43 @@ export function RenderFlowEditor({ projectId, sessionId }: RenderFlowEditorProps
   async function runGenerator(node: CanvasNode, refinedPromptOverride?: string) {
     if (!flowData || node.kind !== "IMAGE_GENERATOR") return;
 
-    if (geminiStatus.data && !geminiStatus.data.connected) {
-      setError("Gemini is not connected. Open Settings and reconnect Gemini first.");
-      return null;
-    }
-
     const generator = node.data as GeneratorNodeData;
+    const providerLabel = generator.imageProvider === "CHATGPT_BROWSER" ? "ChatGPT" : "Gemini";
+    const providerStatus = generator.imageProvider === "CHATGPT_BROWSER" ? chatGPTStatus.data : geminiStatus.data;
+    if (providerStatus && !providerStatus.connected) {
+      setError(`${providerLabel} is not connected. Open Settings and reconnect ${providerLabel} first.`);
+      return null;
+    }
     const liveNodeById = new Map(nodesRef.current.map((candidate) => [candidate.id, candidate]));
-    const assistantNode = generator.promptNodeId ? liveNodeById.get(generator.promptNodeId) ?? nodeById.get(generator.promptNodeId) : null;
-    if (!assistantNode || assistantNode.kind !== "ASSISTANT") {
-      setError("Connect an Assistant node to the prompt port first.");
+    const promptNode = generator.promptNodeId ? liveNodeById.get(generator.promptNodeId) ?? nodeById.get(generator.promptNodeId) : null;
+    if (!promptNode || (promptNode.kind !== "ASSISTANT" && promptNode.kind !== "TEXT")) {
+      setError("Connect a Text or Assistant node to the prompt port first.");
       return null;
     }
 
-    const assistant = assistantNode.data as AssistantNodeData;
-    const refinedPrompt = refinedPromptOverride?.trim() || assistant.outputText.trim();
-    if (!refinedPrompt) {
-      setError("Run the connected Assistant first so the refined prompt is ready.");
-      return null;
-    }
+    let refinedPrompt = "";
+    let instruction = "";
 
-    const textNode = assistant.textNodeId ? liveNodeById.get(assistant.textNodeId) ?? nodeById.get(assistant.textNodeId) : null;
-    const instruction = textNode?.kind === "TEXT" ? (textNode.data as TextNodeData).text.trim() : "";
-    if (!instruction) {
-      setError("The connected Assistant has no Text input.");
-      return null;
+    if (promptNode.kind === "ASSISTANT") {
+      const assistant = promptNode.data as AssistantNodeData;
+      refinedPrompt = refinedPromptOverride?.trim() || assistant.outputText.trim();
+      if (!refinedPrompt) {
+        setError("Run the connected Assistant first so the refined prompt is ready.");
+        return null;
+      }
+      const textNode = assistant.textNodeId ? liveNodeById.get(assistant.textNodeId) ?? nodeById.get(assistant.textNodeId) : null;
+      instruction = textNode?.kind === "TEXT" ? (textNode.data as TextNodeData).text.trim() : "";
+      if (!instruction) {
+        setError("The connected Assistant has no Text input.");
+        return null;
+      }
+    } else {
+      instruction = (promptNode.data as TextNodeData).text.trim();
+      refinedPrompt = refinedPromptOverride?.trim() || instruction;
+      if (!refinedPrompt) {
+        setError("Enter a prompt in the connected Text node first.");
+        return null;
+      }
     }
 
     const sourceAsset = resolveSourceAsset(generator.sourceNodeId);
@@ -2971,7 +3271,8 @@ export function RenderFlowEditor({ projectId, sessionId }: RenderFlowEditorProps
         existingGeneration.userInstruction.trim() === instruction &&
         existingGeneration.refinedPrompt?.trim() === refinedPrompt &&
         existingGeneration.preserveMode === generator.preserveMode &&
-        existingGeneration.preserveEverythingElse === generator.preserveEverythingElse,
+        existingGeneration.preserveEverythingElse === generator.preserveEverythingElse &&
+        existingGeneration.imageProvider === generator.imageProvider,
     );
 
     if (canRetryExisting && existingGeneration) {
@@ -2979,7 +3280,7 @@ export function RenderFlowEditor({ projectId, sessionId }: RenderFlowEditorProps
       updateNode<GeneratorNodeData>(node.id, (data) => ({
         ...data,
         status: "GENERATING",
-        progressMessage: "Retrying Gemini...",
+        progressMessage: `Retrying ${providerLabel}...`,
         errorMessage: null,
         outputAsset: null,
       }));
@@ -2995,11 +3296,11 @@ export function RenderFlowEditor({ projectId, sessionId }: RenderFlowEditorProps
           errorMessage: result.errorMessage,
           outputAsset: null,
         }));
-        setToast("Gemini generation retry started");
+        setToast(`${providerLabel} generation retry started`);
         await flowQuery.refetch();
         return result.id;
       } catch (retryError) {
-        const message = retryError instanceof Error ? retryError.message : "Could not retry Gemini.";
+        const message = retryError instanceof Error ? retryError.message : `Could not retry ${providerLabel}.`;
         updateNode<GeneratorNodeData>(node.id, (data) => ({
           ...data,
           status: "FAILED",
@@ -3015,7 +3316,7 @@ export function RenderFlowEditor({ projectId, sessionId }: RenderFlowEditorProps
     updateNode<GeneratorNodeData>(node.id, (data) => ({
       ...data,
       status: "GENERATING",
-      progressMessage: "Preparing Gemini...",
+      progressMessage: `Preparing ${providerLabel}...`,
       errorMessage: null,
       outputAsset: null,
     }));
@@ -3030,6 +3331,8 @@ export function RenderFlowEditor({ projectId, sessionId }: RenderFlowEditorProps
         refinedPrompt,
         preserveMode: generator.preserveMode,
         preserveEverythingElse: generator.preserveEverythingElse,
+        imageProvider: generator.imageProvider,
+        flowNodeId: node.id,
         ...references,
       });
 
@@ -3042,17 +3345,19 @@ export function RenderFlowEditor({ projectId, sessionId }: RenderFlowEditorProps
         progressMessage: result.progressMessage,
         errorMessage: result.errorMessage,
         outputAsset: null,
+        keepOutput: false,
       }));
-      updateNode<AssistantNodeData>(assistantNode.id, (data) => ({ ...data, generationId: result.id }));
-      if (textNode?.kind === "TEXT") {
-        updateNode<TextNodeData>(textNode.id, (data) => ({ ...data, generationId: result.id }));
+      if (promptNode.kind === "ASSISTANT") {
+        updateNode<AssistantNodeData>(promptNode.id, (data) => ({ ...data, generationId: result.id }));
+      } else {
+        updateNode<TextNodeData>(promptNode.id, (data) => ({ ...data, generationId: result.id }));
       }
 
-      setToast("Gemini generation started");
+      setToast(`${providerLabel} generation started`);
       await flowQuery.refetch();
       return result.id;
     } catch (runError) {
-      const message = runError instanceof Error ? runError.message : "Could not start Gemini.";
+      const message = runError instanceof Error ? runError.message : `Could not start ${providerLabel}.`;
       updateNode<GeneratorNodeData>(node.id, (data) => ({
         ...data,
         status: "FAILED",
@@ -3127,7 +3432,9 @@ export function RenderFlowEditor({ projectId, sessionId }: RenderFlowEditorProps
     const ids = new Set(nodeIds);
     if (ids.size === 0) return;
 
-    const nodesToRemove = nodes.filter((node) => ids.has(node.id));
+    const nodesBeforeRemove = nodesRef.current;
+    const nodesToRemove = nodesBeforeRemove.filter((node) => ids.has(node.id));
+    if (nodesToRemove.length === 0) return;
 
     for (const node of nodesToRemove) {
       if (node.kind === "IMAGE") {
@@ -3150,14 +3457,10 @@ export function RenderFlowEditor({ projectId, sessionId }: RenderFlowEditorProps
     );
 
     const fullyRemovedGenerationIds = [...affectedGenerationIds].filter((generationId) =>
-      nodes
+      nodesBeforeRemove
         .filter((node) => getNodeGenerationId(node) === generationId)
         .every((node) => ids.has(node.id)),
     );
-
-    if (fullyRemovedGenerationIds.length > 0) {
-      setHiddenGenerationIds((current) => [...new Set([...current, ...fullyRemovedGenerationIds])]);
-    }
 
     const removedPersistentNodeIds = nodesToRemove
       .filter((node) => {
@@ -3167,39 +3470,53 @@ export function RenderFlowEditor({ projectId, sessionId }: RenderFlowEditorProps
         return Boolean(image.asset || image.remoteFilePath || image.referenceImageId);
       })
       .map((node) => node.id);
-    if (removedPersistentNodeIds.length > 0) {
-      setHiddenNodeIds((current) => [...new Set([...current, ...removedPersistentNodeIds])]);
-    }
 
-    setNodes((current) =>
-      current
-        .filter((item) => !ids.has(item.id))
-        .map((item) => {
-          if (item.kind === "ASSISTANT") {
-            const data = item.data as AssistantNodeData;
-            return data.textNodeId && ids.has(data.textNodeId)
-              ? { ...item, data: { ...data, textNodeId: null, state: "IDLE", outputText: "" } }
-              : item;
-          }
+    const nextHiddenGenerationIds = [
+      ...new Set([...hiddenGenerationIds, ...fullyRemovedGenerationIds]),
+    ];
+    const nextHiddenNodeIds = [
+      ...new Set([...hiddenNodeIds, ...removedPersistentNodeIds]),
+    ];
 
-          if (item.kind === "IMAGE_GENERATOR") {
-            const data = item.data as GeneratorNodeData;
-            return {
-              ...item,
-              data: {
-                ...data,
-                promptNodeId: data.promptNodeId && ids.has(data.promptNodeId) ? null : data.promptNodeId,
-                sourceNodeId: data.sourceNodeId && ids.has(data.sourceNodeId) ? null : data.sourceNodeId,
-                referenceNodeIds: data.referenceNodeIds.filter((id) => !ids.has(id)),
-              },
-            };
-          }
+    const nextNodes: CanvasNode[] = nodesBeforeRemove
+      .filter((item) => !ids.has(item.id))
+      .map((item): CanvasNode => {
+        if (item.kind === "ASSISTANT") {
+          const data = item.data as AssistantNodeData;
+          return data.textNodeId && ids.has(data.textNodeId)
+            ? { ...item, data: { ...data, textNodeId: null, state: "IDLE" as AssistantState, outputText: "" } }
+            : item;
+        }
 
-          return item;
-        }),
-    );
+        if (item.kind === "IMAGE_GENERATOR") {
+          const data = item.data as GeneratorNodeData;
+          return {
+            ...item,
+            data: {
+              ...data,
+              promptNodeId: data.promptNodeId && ids.has(data.promptNodeId) ? null : data.promptNodeId,
+              sourceNodeId: data.sourceNodeId && ids.has(data.sourceNodeId) ? null : data.sourceNodeId,
+              referenceNodeIds: data.referenceNodeIds.filter((id) => !ids.has(id)),
+            },
+          };
+        }
 
+        return item;
+      });
+
+    // Update React state and flush the exact same state to SQLite immediately.
+    // The debounced autosave is still kept for normal edits/moves, but delete
+    // must be durable before the user closes or leaves the project.
+    suppressNextHistoryRef.current = false;
+    setHiddenGenerationIds(nextHiddenGenerationIds);
+    setHiddenNodeIds(nextHiddenNodeIds);
+    setNodes(nextNodes);
     setSelectedNodeIds((current) => current.filter((id) => !ids.has(id)));
+
+    void persistCanvasState(nextNodes, camera, nextHiddenGenerationIds, nextHiddenNodeIds).catch((persistError) => {
+      console.warn("Could not immediately persist deleted canvas nodes:", persistError);
+      setError("Could not save the canvas delete. Check the API log and try again.");
+    });
   }
 
   function removeNode(node: CanvasNode) {
@@ -3272,11 +3589,12 @@ export function RenderFlowEditor({ projectId, sessionId }: RenderFlowEditorProps
         {canConnect && (
           <button
             type="button"
-            onClick={(event) =>
+            onPointerDown={(event) =>
               startConnection(event, node, node.kind === "TEXT" || node.kind === "ASSISTANT" ? "TEXT" : "IMAGE")
             }
+            onClick={(event) => { event.preventDefault(); event.stopPropagation(); }}
             className="flex h-9 w-10 items-center justify-center rounded-lg text-white/75 hover:bg-white/[0.08] hover:text-white"
-            title="Connect output"
+            title="Drag to connect output"
           >
             <Link2 size={16} />
           </button>
@@ -3352,7 +3670,17 @@ export function RenderFlowEditor({ projectId, sessionId }: RenderFlowEditorProps
           type="button"
           title={label}
           aria-label={label}
-          onClick={onClick}
+          data-flow-input-node={side === "LEFT" ? node.id : undefined}
+          data-flow-input-label={side === "LEFT" ? label : undefined}
+          onPointerDown={
+            side === "RIGHT"
+              ? (event) => startConnection(event, node, type)
+              : (event) => event.stopPropagation()
+          }
+          onClick={(event) => {
+            event.preventDefault();
+            event.stopPropagation();
+          }}
           className={[
             "absolute z-20 flex h-[34px] w-[34px] items-center justify-center rounded-full border border-white/[0.1] bg-[#252527] text-[13px] text-white/75 shadow-[0_7px_18px_rgba(0,0,0,0.35)] transition",
             side === "LEFT" ? "-left-[43px]" : "-right-[43px]",
@@ -3458,6 +3786,18 @@ export function RenderFlowEditor({ projectId, sessionId }: RenderFlowEditorProps
             if (!selectedNodeIds.includes(node.id)) setSelectedNodeIds([node.id]);
           }}
           onClick={(event) => event.stopPropagation()}
+          onDragStart={(event) => {
+            const text = data.text.trim();
+            if (!text) {
+              event.preventDefault();
+              return;
+            }
+            event.dataTransfer.effectAllowed = "copy";
+            event.dataTransfer.setData(INTERNAL_NODE_DRAG_MIME, node.id);
+            event.dataTransfer.setData(INTERNAL_NODE_DRAG_KIND_MIME, node.kind);
+            event.dataTransfer.setData("text/plain", text);
+          }}
+          draggable={Boolean(data.text.trim())}
           placeholder="Write the edit you want. Example: Change only the background color to burgundy and keep everything else unchanged."
           className="h-[calc(100%-44px)] w-full resize-none rounded-b-[13px] bg-transparent px-5 py-4 text-[17px] leading-7 text-white/92 outline-none placeholder:text-white/26"
         />
@@ -3522,6 +3862,18 @@ export function RenderFlowEditor({ projectId, sessionId }: RenderFlowEditorProps
                 event.stopPropagation();
                 if (!selectedNodeIds.includes(node.id)) setSelectedNodeIds([node.id]);
               }}
+              onDragStart={(event) => {
+                const prompt = data.outputText.trim();
+                if (!prompt) {
+                  event.preventDefault();
+                  return;
+                }
+                event.dataTransfer.effectAllowed = "copy";
+                event.dataTransfer.setData(INTERNAL_NODE_DRAG_MIME, node.id);
+                event.dataTransfer.setData(INTERNAL_NODE_DRAG_KIND_MIME, node.kind);
+                event.dataTransfer.setData("text/plain", prompt);
+              }}
+              draggable={Boolean(data.outputText.trim())}
               placeholder="Run Assistant to turn the Text instruction into the final production prompt Gemini will use. You can edit the result here before generating."
               className="h-full w-full resize-none bg-transparent text-[15px] leading-[1.68] text-white/86 outline-none placeholder:text-white/34"
             />
@@ -3629,6 +3981,20 @@ export function RenderFlowEditor({ projectId, sessionId }: RenderFlowEditorProps
     );
   }
 
+  async function keepGeneratorOutput(node: CanvasNode) {
+    if (node.kind !== "IMAGE_GENERATOR") return;
+    const data = node.data as GeneratorNodeData;
+    if (!data.generationId || !data.outputAsset || data.keepOutput) return;
+
+    try {
+      await keepGenerationOutput.mutateAsync(data.generationId);
+      updateNode<GeneratorNodeData>(node.id, (current) => ({ ...current, keepOutput: true }));
+      setToast("Generated image kept");
+    } catch (keepError) {
+      setError(keepError instanceof Error ? keepError.message : "Could not keep generated image.");
+    }
+  }
+
   async function saveGeneratorImage(asset: Asset) {
     try {
       if (!window.eskanderStudio?.desktop) {
@@ -3722,11 +4088,67 @@ export function RenderFlowEditor({ projectId, sessionId }: RenderFlowEditorProps
     const referenceCount = data.referenceNodeIds.length;
     const promptConnected = Boolean(data.promptNodeId);
     const sourceConnected = Boolean(data.sourceNodeId);
+    const providerLabel = data.imageProvider === "CHATGPT_BROWSER" ? "ChatGPT" : "Gemini";
 
     return nodeShell(
       node,
       <>
-        <div className="absolute inset-x-0 top-0 h-[284px] overflow-hidden rounded-t-[13px] bg-[#151517]">
+        <div
+          className="absolute inset-x-0 top-0 h-[284px] overflow-hidden rounded-t-[13px] bg-[#151517]"
+          onDragOver={(event) => {
+            const types = Array.from(event.dataTransfer.types ?? []);
+            const hasImageFile = Array.from(event.dataTransfer.items).some((item) => isImageTransferItem(item));
+            const hasNode = types.includes(INTERNAL_NODE_DRAG_MIME);
+            const hasText = types.includes("text/plain");
+            if (hasImageFile || hasNode || hasText) {
+              event.preventDefault();
+              event.dataTransfer.dropEffect = "copy";
+            }
+          }}
+          onDrop={(event) => {
+            event.preventDefault();
+            event.stopPropagation();
+            const world = screenToWorld(event.clientX, event.clientY);
+            const input = resolveGeneratorDropInput(node, world.y);
+            const nodeId = event.dataTransfer.getData(INTERNAL_NODE_DRAG_MIME);
+            const nodeKind = event.dataTransfer.getData(INTERNAL_NODE_DRAG_KIND_MIME);
+            if (nodeId && nodeKind) {
+              if (nodeKind === "IMAGE" || nodeKind === "IMAGE_GENERATOR") {
+                void attachImageNodeToGenerator(node.id, nodeId, input === "PROMPT" ? undefined : input);
+                return;
+              }
+              if ((nodeKind === "TEXT" || nodeKind === "ASSISTANT") && input === "PROMPT") {
+                updateNode<GeneratorNodeData>(node.id, (current) => ({ ...current, promptNodeId: nodeId }));
+                return;
+              }
+            }
+
+            const file = Array.from(event.dataTransfer.files).find((candidate) => isSupportedImageFile(candidate));
+            if (file) {
+              void (async () => {
+                const created = await createImageNodesFromFiles([file], node.x - 310, node.y + 170);
+                const createdNode = created[0];
+                if (createdNode) await attachImageNodeToGenerator(node.id, createdNode.id, input === "PROMPT" ? undefined : input);
+              })();
+              return;
+            }
+
+            const urls = extractImageUrlsFromDataTransfer(event.dataTransfer);
+            if (urls.length > 0) {
+              void (async () => {
+                const created = await createImageNodesFromUrls(urls, node.x - 310, node.y + 170);
+                const createdNode = created[0];
+                if (createdNode) await attachImageNodeToGenerator(node.id, createdNode.id, input === "PROMPT" ? undefined : input);
+              })();
+              return;
+            }
+
+            const promptText = event.dataTransfer.getData("text/plain").trim();
+            if (promptText && input === "PROMPT") {
+              void createPromptNodeAndAttachToGenerator(node.id, promptText);
+            }
+          }}
+        >
           {completed ? (
             <div className="relative h-full w-full">
               <img
@@ -3742,10 +4164,23 @@ export function RenderFlowEditor({ projectId, sessionId }: RenderFlowEditorProps
                 onDragStart={(event) => startGeneratorImageDrag(event, data.outputAsset!)}
                 className="h-full w-full cursor-grab select-none object-contain active:cursor-grabbing"
               />
-              <div className="pointer-events-none absolute left-3 top-3 rounded-lg border border-white/[0.1] bg-black/70 px-2.5 py-1 text-[12px] font-medium text-white/82 backdrop-blur">
+              <div className="pointer-events-none absolute left-3 top-12 rounded-lg border border-white/[0.1] bg-black/70 px-2.5 py-1 text-[12px] font-medium text-white/82 backdrop-blur">
                 Ready · drag image
               </div>
               <div className="absolute right-3 top-3 z-10 flex items-center gap-1 rounded-xl border border-white/[0.08] bg-black/70 p-1 shadow-lg backdrop-blur">
+                <button
+                  type="button"
+                  disabled={Boolean(data.keepOutput) || keepGenerationOutput.isPending}
+                  onPointerDown={(event) => event.stopPropagation()}
+                  onClick={(event) => {
+                    event.stopPropagation();
+                    void keepGeneratorOutput(node);
+                  }}
+                  className="flex h-8 items-center gap-1.5 rounded-lg px-2 text-[11px] font-medium text-white/78 transition hover:bg-white/[0.08] hover:text-white disabled:cursor-default disabled:opacity-60"
+                  title={data.keepOutput ? "This output will be kept" : "Keep this output when generating again"}
+                >
+                  <Check size={13} /> {data.keepOutput ? "Kept" : "Keep"}
+                </button>
                 <button
                   type="button"
                   onPointerDown={(event) => event.stopPropagation()}
@@ -3776,14 +4211,33 @@ export function RenderFlowEditor({ projectId, sessionId }: RenderFlowEditorProps
             <div className="relative flex h-full flex-col items-center justify-center overflow-hidden text-white/48">
               <div className="absolute inset-0 bg-[radial-gradient(circle_at_50%_90%,rgba(97,227,160,0.08),transparent_45%)]" />
               <LoaderCircle size={26} className="mb-3 animate-spin text-white/68" />
-              <p className="text-[14px]">{data.progressMessage ?? "Gemini is generating your image..."}</p>
+              <p className="text-[14px]">{data.progressMessage ?? `${providerLabel} is generating your image...`}</p>
             </div>
           ) : (
             <div className="flex h-full flex-col items-center justify-center gap-3 text-white/[0.12]">
               <FileImage size={56} strokeWidth={1.2} />
-              <span className="text-[13px]">Gemini output appears here</span>
+              <span className="text-[13px]">{providerLabel} output appears here</span>
             </div>
           )}
+        </div>
+
+        <div className="absolute left-3 top-3 z-20">
+          <select
+            value={data.imageProvider}
+            disabled={active}
+            onPointerDown={(event) => event.stopPropagation()}
+            onChange={(event) =>
+              updateNode<GeneratorNodeData>(node.id, (current) => ({
+                ...current,
+                imageProvider: event.target.value as GeneratorNodeData["imageProvider"],
+              }))
+            }
+            className="h-8 rounded-lg border border-white/[0.1] bg-black/70 px-2.5 text-[12px] font-medium text-white/88 outline-none backdrop-blur disabled:opacity-50"
+            title="Image generation provider"
+          >
+            <option value="GEMINI_BROWSER">Gemini</option>
+            <option value="CHATGPT_BROWSER">ChatGPT</option>
+          </select>
         </div>
 
         {active && <div className="pointer-events-none absolute inset-0 rounded-[14px] border border-emerald-400/50" />}
@@ -3792,14 +4246,14 @@ export function RenderFlowEditor({ projectId, sessionId }: RenderFlowEditorProps
           {failed ? (
             <span className="text-red-300/95">{data.errorMessage ?? "Generation failed."}</span>
           ) : active ? (
-            <span>{data.progressMessage ?? "Gemini is generating your image..."}</span>
+            <span>{data.progressMessage ?? `${providerLabel} is generating your image...`}</span>
           ) : (
             <span>
               {promptConnected ? "Prompt connected." : "Connect Assistant prompt."}{" "}
               {sourceConnected ? "Source ready." : "Add a source image."}{" "}
               {referenceCount > 0
-                ? `${referenceCount} visual reference${referenceCount === 1 ? "" : "s"} will be sent directly to Gemini.`
-                : "References are optional and go directly to Gemini."}
+                ? `${referenceCount} visual reference${referenceCount === 1 ? "" : "s"} will be sent directly to ${providerLabel}.`
+                : `References are optional and go directly to ${providerLabel}.`}
             </span>
           )}
         </div>
@@ -3865,7 +4319,7 @@ export function RenderFlowEditor({ projectId, sessionId }: RenderFlowEditorProps
                 openReferencePicker(node.id);
               }}
               className="flex h-9 items-center gap-2 rounded-lg border border-white/[0.08] bg-[#202024] px-3 text-[13px] text-white/72 transition hover:bg-[#25252a] disabled:opacity-30"
-              title="Upload a visual reference for Gemini"
+              title={`Upload a visual reference for ${providerLabel}`}
             >
               <ImagePlus size={14} /> Refs {referenceCount}/5
             </button>
@@ -3879,7 +4333,7 @@ export function RenderFlowEditor({ projectId, sessionId }: RenderFlowEditorProps
               else void runGenerator(node);
             }}
             className="flex h-10 w-10 shrink-0 items-center justify-center rounded-full bg-white text-black transition hover:scale-105"
-            title={active ? "Stop generation" : "Generate image with Gemini"}
+            title={active ? "Stop generation" : `Generate image with ${providerLabel}`}
           >
             {active ? <Square size={14} fill="currentColor" /> : <CirclePlay size={19} fill="currentColor" />}
           </button>
@@ -3890,7 +4344,7 @@ export function RenderFlowEditor({ projectId, sessionId }: RenderFlowEditorProps
           side: "LEFT",
           top: 54,
           type: "TEXT",
-          label: "Assistant prompt input",
+          label: "Text or Assistant prompt input",
           onClick: (event) => {
             event.stopPropagation();
             connectGeneratorInput(node.id, "PROMPT");
@@ -3924,7 +4378,7 @@ export function RenderFlowEditor({ projectId, sessionId }: RenderFlowEditorProps
         })}
         <button
           type="button"
-          onClick={(event) => {
+          onPointerDown={(event) => {
             event.stopPropagation();
             if (!data.outputAsset) {
               setError("Generate an image first before connecting this output.");
@@ -3932,6 +4386,7 @@ export function RenderFlowEditor({ projectId, sessionId }: RenderFlowEditorProps
             }
             startConnection(event, node, "IMAGE");
           }}
+          onClick={(event) => { event.preventDefault(); event.stopPropagation(); }}
           className="absolute -right-[43px] top-[54px] z-20 flex h-[34px] w-[34px] items-center justify-center rounded-full border border-white/[0.1] bg-[#252527] text-white/75 shadow-[0_7px_18px_rgba(0,0,0,0.35)] hover:bg-[#303033]"
           title="Generated image output"
         >
@@ -3945,14 +4400,42 @@ export function RenderFlowEditor({ projectId, sessionId }: RenderFlowEditorProps
   function renderImageNode(node: CanvasNode) {
     const data = node.data as ImageNodeData;
     const hasImage = Boolean(data.asset || data.remoteFilePath || data.localFile || data.previewUrl);
-    const slotLabel = data.role === "REFERENCE" ? "Set reference image" : "Set source image";
+    const slotLabel = hasImage ? "Image block" : "Add image";
 
     return nodeShell(
       node,
       <>
-        <div className="flex h-[156px] items-center justify-center overflow-hidden rounded-t-[13px] bg-[#111113]">
+        <div
+          className="flex h-[156px] items-center justify-center overflow-hidden rounded-t-[13px] bg-[#111113]"
+          onDragOver={(event) => {
+            if (Array.from(event.dataTransfer.items).some((item) => isImageTransferItem(item))) {
+              event.preventDefault();
+              event.dataTransfer.dropEffect = "copy";
+            }
+          }}
+          onDrop={(event) => {
+            const file = Array.from(event.dataTransfer.files).find((candidate) => isSupportedImageFile(candidate));
+            if (!file) return;
+            event.preventDefault();
+            event.stopPropagation();
+            void replaceImageNodeWithFile(node.id, file);
+          }}
+          title="Drop an image here to replace this image"
+        >
           {hasImage ? (
-            <img src={data.previewUrl} alt={data.fileName} className="h-full w-full object-contain" />
+            <img
+              src={data.previewUrl}
+              alt={data.fileName}
+              draggable
+              onDragStart={(event) => {
+                event.stopPropagation();
+                event.dataTransfer.effectAllowed = "copy";
+                event.dataTransfer.setData(INTERNAL_NODE_DRAG_MIME, node.id);
+                event.dataTransfer.setData(INTERNAL_NODE_DRAG_KIND_MIME, node.kind);
+                event.dataTransfer.setData("text/plain", data.fileName);
+              }}
+              className="h-full w-full cursor-grab object-contain active:cursor-grabbing"
+            />
           ) : (
             <button
               type="button"
@@ -3966,7 +4449,7 @@ export function RenderFlowEditor({ projectId, sessionId }: RenderFlowEditorProps
             >
               <ImagePlus size={28} strokeWidth={1.4} />
               <span className="text-[13px] font-medium">{slotLabel}</span>
-              <span className="text-[11px] text-white/24">Workflow input slot</span>
+              <span className="text-[11px] text-white/24">Drop or paste an image here</span>
             </button>
           )}
         </div>
@@ -3975,10 +4458,10 @@ export function RenderFlowEditor({ projectId, sessionId }: RenderFlowEditorProps
             <p className="truncate text-[13px] text-white/68">{hasImage ? data.fileName : slotLabel}</p>
             <p className="mt-0.5 text-[13px] uppercase tracking-[0.08em] text-white/30">{data.role.toLowerCase()}</p>
           </div>
-          {!hasImage ? (
-            <span className="rounded-md bg-amber-400/10 px-1.5 py-1 text-[11px] font-medium text-amber-200/80">INPUT</span>
-          ) : data.localFile ? (
+          {data.localFile ? (
             <span className="rounded-md bg-[#6f55ff]/15 px-1.5 py-1 text-[13px] text-[#b9aaff]">LOCAL</span>
+          ) : hasImage ? (
+            <span className="rounded-md bg-white/[0.08] px-1.5 py-1 text-[11px] font-medium text-white/72">DRAG</span>
           ) : null}
         </div>
 
@@ -4065,7 +4548,7 @@ export function RenderFlowEditor({ projectId, sessionId }: RenderFlowEditorProps
         <div className="flex min-w-0 items-center gap-3">
           <button
             type="button"
-            onClick={() => router.push(`/projects/${projectId}/renders/${sessionId}`)}
+            onClick={() => router.push(`/`)}
             className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg text-white/62 hover:bg-white/[0.05] hover:text-white"
             title="Back to render workspace"
           >
@@ -4165,6 +4648,35 @@ export function RenderFlowEditor({ projectId, sessionId }: RenderFlowEditorProps
         onPointerDown={handleViewportPointerDown}
         onPointerMove={handleViewportPointerMove}
         onWheel={handleWheel}
+        onDragOver={(event) => {
+          const types = Array.from(event.dataTransfer.types ?? []);
+          const hasImageFile = Array.from(event.dataTransfer.items).some((item) => isImageTransferItem(item));
+          const hasImageLikeString = types.includes("text/uri-list") || types.includes("text/html") || types.includes("text/plain");
+          if (hasImageFile || hasImageLikeString) {
+            event.preventDefault();
+            event.dataTransfer.dropEffect = "copy";
+          }
+        }}
+        onDrop={(event) => {
+          const files = Array.from(event.dataTransfer.files).filter((file) => isSupportedImageFile(file));
+          const urls = extractImageUrlsFromDataTransfer(event.dataTransfer);
+          if (files.length === 0 && urls.length === 0) return;
+          event.preventDefault();
+          event.stopPropagation();
+          const world = screenToWorld(event.clientX, event.clientY);
+          const addPromise = files.length > 0
+            ? createImageNodesFromFiles(files, world.x, world.y)
+            : createImageNodesFromUrls(urls, world.x, world.y);
+          void addPromise
+            .then((created) => {
+              if (created.length > 0) {
+                setToast(created.length === 1 ? "Image added to canvas" : `${created.length} images added to canvas`);
+              }
+            })
+            .catch((dropError) => {
+              setError(dropError instanceof Error ? dropError.message : "Could not add the image to the canvas.");
+            });
+        }}
       >
         <div
           className="absolute left-0 top-0"
@@ -4248,9 +4760,24 @@ export function RenderFlowEditor({ projectId, sessionId }: RenderFlowEditorProps
                 height: selectedGroupBounds.height,
               }}
             >
-              <div className="absolute -top-7 left-0 rounded-md border border-[#5f9dff]/30 bg-[#141b27]/95 px-2 py-1 text-[11px] font-medium text-[#a8c8ff] shadow-lg">
+              <div className="absolute -top-8 left-0 rounded-md border border-[#5f9dff]/30 bg-[#141b27]/95 px-2 py-1 text-[11px] font-medium text-[#a8c8ff] shadow-lg">
                 {selectedNodeIds.length} selected · drag anywhere inside
               </div>
+              {selectedNodeIds.some((nodeId) => nodeById.get(nodeId)?.kind === "IMAGE_GENERATOR") && (
+                <button
+                  type="button"
+                  className="pointer-events-auto absolute -top-9 right-0 flex h-8 items-center gap-1.5 rounded-lg border border-emerald-400/25 bg-[#15251e]/95 px-3 text-[11px] font-semibold text-emerald-200 shadow-lg transition hover:bg-[#1b3027]"
+                  onPointerDown={(event) => event.stopPropagation()}
+                  onClick={(event) => {
+                    event.preventDefault();
+                    event.stopPropagation();
+                    void runSelectedWorkflow();
+                  }}
+                  title="Run only the selected flow (Ctrl+R)"
+                >
+                  <CirclePlay size={13} /> Run Flow
+                </button>
+              )}
             </div>
           )}
 
@@ -4357,8 +4884,8 @@ export function RenderFlowEditor({ projectId, sessionId }: RenderFlowEditorProps
 
         {addMenu && (
           <div
-            className="fixed z-[100] w-[265px] overflow-hidden rounded-[13px] border border-white/[0.08] bg-[#202022]/98 shadow-[0_24px_70px_rgba(0,0,0,.45)] backdrop-blur-xl"
-            style={{ left: clamp(addMenu.screenX, 88, window.innerWidth - 285), top: clamp(addMenu.screenY, 75, window.innerHeight - 390) }}
+            className="fixed z-[100] max-h-[calc(100vh-96px)] w-[285px] overflow-y-auto rounded-[13px] border border-white/[0.08] bg-[#202022]/98 shadow-[0_24px_70px_rgba(0,0,0,.45)] backdrop-blur-xl"
+            style={{ left: clamp(addMenu.screenX, 88, window.innerWidth - 305), top: clamp(addMenu.screenY, 48, Math.max(48, window.innerHeight - 500)) }}
             onPointerDown={(event) => event.stopPropagation()}
           >
             <div className="flex h-11 items-center gap-2 border-b border-white/[0.06] px-3 text-white/35">
@@ -4367,10 +4894,16 @@ export function RenderFlowEditor({ projectId, sessionId }: RenderFlowEditorProps
             </div>
             <div className="p-1.5">
               {!addMenu.pending && (
-                <button onClick={() => addFromMenu("PIPELINE")} className="flex w-full items-center gap-3 rounded-lg px-3 py-2.5 text-left text-[13px] text-white/82 hover:bg-white/[0.06]">
-                  <span className="flex h-7 w-7 items-center justify-center rounded-md bg-[#4f79ff]/15 text-[#86a4ff]"><Link2 size={14} /></span>
-                  New AI pipeline
-                </button>
+                <>
+                  <div className="px-3 pb-1 pt-1 text-[10px] font-semibold uppercase tracking-[0.16em] text-white/28">AI Pipeline</div>
+                  <button onClick={() => addFromMenu("PIPELINE_WITHOUT_SOURCE")} className="flex w-full items-center gap-3 rounded-lg px-3 py-2.5 text-left text-[13px] text-white/82 hover:bg-white/[0.06]">
+                    <span className="flex h-7 w-7 items-center justify-center rounded-md bg-[#4f79ff]/10 text-[#86a4ff]"><Link2 size={14} /></span>
+                    <span className="flex flex-col">
+                      <span>New AI pipeline</span>
+                      <span className="text-[10px] text-white/35">No Source card</span>
+                    </span>
+                  </button>
+                </>
               )}
 
               {(!addMenu.pending || addMenu.pending.outputType === "TEXT") && (
@@ -4400,6 +4933,13 @@ export function RenderFlowEditor({ projectId, sessionId }: RenderFlowEditorProps
                 <button onClick={() => addFromMenu("IMAGE_GENERATOR")} className="flex w-full items-center gap-3 rounded-lg px-3 py-2.5 text-left text-[13px] text-white/82 hover:bg-white/[0.06]">
                   <span className="flex h-7 w-7 items-center justify-center rounded-md bg-emerald-400/10 text-emerald-300"><FileImage size={14} /></span>
                   Image Generator (use as source)
+                </button>
+              )}
+
+              {!addMenu.pending && (
+                <button onClick={() => addFromMenu("SOURCE")} className="flex w-full items-center gap-3 rounded-lg px-3 py-2.5 text-left text-[13px] text-white/82 hover:bg-white/[0.06]">
+                  <span className="flex h-7 w-7 items-center justify-center rounded-md bg-emerald-400/10 text-emerald-300"><ImagePlus size={14} /></span>
+                  Source Image card
                 </button>
               )}
 

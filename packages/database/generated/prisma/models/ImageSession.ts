@@ -28,6 +28,8 @@ export type ImageSessionMinAggregateOutputType = {
   id: string | null
   projectId: string | null
   name: string | null
+  isWorkspace: boolean | null
+  flowStateJson: string | null
   createdAt: Date | null
   updatedAt: Date | null
 }
@@ -36,6 +38,8 @@ export type ImageSessionMaxAggregateOutputType = {
   id: string | null
   projectId: string | null
   name: string | null
+  isWorkspace: boolean | null
+  flowStateJson: string | null
   createdAt: Date | null
   updatedAt: Date | null
 }
@@ -44,6 +48,8 @@ export type ImageSessionCountAggregateOutputType = {
   id: number
   projectId: number
   name: number
+  isWorkspace: number
+  flowStateJson: number
   createdAt: number
   updatedAt: number
   _all: number
@@ -54,6 +60,8 @@ export type ImageSessionMinAggregateInputType = {
   id?: true
   projectId?: true
   name?: true
+  isWorkspace?: true
+  flowStateJson?: true
   createdAt?: true
   updatedAt?: true
 }
@@ -62,6 +70,8 @@ export type ImageSessionMaxAggregateInputType = {
   id?: true
   projectId?: true
   name?: true
+  isWorkspace?: true
+  flowStateJson?: true
   createdAt?: true
   updatedAt?: true
 }
@@ -70,6 +80,8 @@ export type ImageSessionCountAggregateInputType = {
   id?: true
   projectId?: true
   name?: true
+  isWorkspace?: true
+  flowStateJson?: true
   createdAt?: true
   updatedAt?: true
   _all?: true
@@ -151,6 +163,8 @@ export type ImageSessionGroupByOutputType = {
   id: string
   projectId: string
   name: string
+  isWorkspace: boolean
+  flowStateJson: string | null
   createdAt: Date
   updatedAt: Date
   _count: ImageSessionCountAggregateOutputType | null
@@ -180,6 +194,8 @@ export type ImageSessionWhereInput = {
   id?: Prisma.StringFilter<"ImageSession"> | string
   projectId?: Prisma.StringFilter<"ImageSession"> | string
   name?: Prisma.StringFilter<"ImageSession"> | string
+  isWorkspace?: Prisma.BoolFilter<"ImageSession"> | boolean
+  flowStateJson?: Prisma.StringNullableFilter<"ImageSession"> | string | null
   createdAt?: Prisma.DateTimeFilter<"ImageSession"> | Date | string
   updatedAt?: Prisma.DateTimeFilter<"ImageSession"> | Date | string
   project?: Prisma.XOR<Prisma.ProjectScalarRelationFilter, Prisma.ProjectWhereInput>
@@ -191,6 +207,8 @@ export type ImageSessionOrderByWithRelationInput = {
   id?: Prisma.SortOrder
   projectId?: Prisma.SortOrder
   name?: Prisma.SortOrder
+  isWorkspace?: Prisma.SortOrder
+  flowStateJson?: Prisma.SortOrderInput | Prisma.SortOrder
   createdAt?: Prisma.SortOrder
   updatedAt?: Prisma.SortOrder
   project?: Prisma.ProjectOrderByWithRelationInput
@@ -205,6 +223,8 @@ export type ImageSessionWhereUniqueInput = Prisma.AtLeast<{
   NOT?: Prisma.ImageSessionWhereInput | Prisma.ImageSessionWhereInput[]
   projectId?: Prisma.StringFilter<"ImageSession"> | string
   name?: Prisma.StringFilter<"ImageSession"> | string
+  isWorkspace?: Prisma.BoolFilter<"ImageSession"> | boolean
+  flowStateJson?: Prisma.StringNullableFilter<"ImageSession"> | string | null
   createdAt?: Prisma.DateTimeFilter<"ImageSession"> | Date | string
   updatedAt?: Prisma.DateTimeFilter<"ImageSession"> | Date | string
   project?: Prisma.XOR<Prisma.ProjectScalarRelationFilter, Prisma.ProjectWhereInput>
@@ -216,6 +236,8 @@ export type ImageSessionOrderByWithAggregationInput = {
   id?: Prisma.SortOrder
   projectId?: Prisma.SortOrder
   name?: Prisma.SortOrder
+  isWorkspace?: Prisma.SortOrder
+  flowStateJson?: Prisma.SortOrderInput | Prisma.SortOrder
   createdAt?: Prisma.SortOrder
   updatedAt?: Prisma.SortOrder
   _count?: Prisma.ImageSessionCountOrderByAggregateInput
@@ -230,6 +252,8 @@ export type ImageSessionScalarWhereWithAggregatesInput = {
   id?: Prisma.StringWithAggregatesFilter<"ImageSession"> | string
   projectId?: Prisma.StringWithAggregatesFilter<"ImageSession"> | string
   name?: Prisma.StringWithAggregatesFilter<"ImageSession"> | string
+  isWorkspace?: Prisma.BoolWithAggregatesFilter<"ImageSession"> | boolean
+  flowStateJson?: Prisma.StringNullableWithAggregatesFilter<"ImageSession"> | string | null
   createdAt?: Prisma.DateTimeWithAggregatesFilter<"ImageSession"> | Date | string
   updatedAt?: Prisma.DateTimeWithAggregatesFilter<"ImageSession"> | Date | string
 }
@@ -237,6 +261,8 @@ export type ImageSessionScalarWhereWithAggregatesInput = {
 export type ImageSessionCreateInput = {
   id?: string
   name: string
+  isWorkspace?: boolean
+  flowStateJson?: string | null
   createdAt?: Date | string
   updatedAt?: Date | string
   project: Prisma.ProjectCreateNestedOneWithoutImageSessionsInput
@@ -248,6 +274,8 @@ export type ImageSessionUncheckedCreateInput = {
   id?: string
   projectId: string
   name: string
+  isWorkspace?: boolean
+  flowStateJson?: string | null
   createdAt?: Date | string
   updatedAt?: Date | string
   assets?: Prisma.AssetUncheckedCreateNestedManyWithoutImageSessionInput
@@ -257,6 +285,8 @@ export type ImageSessionUncheckedCreateInput = {
 export type ImageSessionUpdateInput = {
   id?: Prisma.StringFieldUpdateOperationsInput | string
   name?: Prisma.StringFieldUpdateOperationsInput | string
+  isWorkspace?: Prisma.BoolFieldUpdateOperationsInput | boolean
+  flowStateJson?: Prisma.NullableStringFieldUpdateOperationsInput | string | null
   createdAt?: Prisma.DateTimeFieldUpdateOperationsInput | Date | string
   updatedAt?: Prisma.DateTimeFieldUpdateOperationsInput | Date | string
   project?: Prisma.ProjectUpdateOneRequiredWithoutImageSessionsNestedInput
@@ -268,6 +298,8 @@ export type ImageSessionUncheckedUpdateInput = {
   id?: Prisma.StringFieldUpdateOperationsInput | string
   projectId?: Prisma.StringFieldUpdateOperationsInput | string
   name?: Prisma.StringFieldUpdateOperationsInput | string
+  isWorkspace?: Prisma.BoolFieldUpdateOperationsInput | boolean
+  flowStateJson?: Prisma.NullableStringFieldUpdateOperationsInput | string | null
   createdAt?: Prisma.DateTimeFieldUpdateOperationsInput | Date | string
   updatedAt?: Prisma.DateTimeFieldUpdateOperationsInput | Date | string
   assets?: Prisma.AssetUncheckedUpdateManyWithoutImageSessionNestedInput
@@ -278,6 +310,8 @@ export type ImageSessionCreateManyInput = {
   id?: string
   projectId: string
   name: string
+  isWorkspace?: boolean
+  flowStateJson?: string | null
   createdAt?: Date | string
   updatedAt?: Date | string
 }
@@ -285,6 +319,8 @@ export type ImageSessionCreateManyInput = {
 export type ImageSessionUpdateManyMutationInput = {
   id?: Prisma.StringFieldUpdateOperationsInput | string
   name?: Prisma.StringFieldUpdateOperationsInput | string
+  isWorkspace?: Prisma.BoolFieldUpdateOperationsInput | boolean
+  flowStateJson?: Prisma.NullableStringFieldUpdateOperationsInput | string | null
   createdAt?: Prisma.DateTimeFieldUpdateOperationsInput | Date | string
   updatedAt?: Prisma.DateTimeFieldUpdateOperationsInput | Date | string
 }
@@ -293,6 +329,8 @@ export type ImageSessionUncheckedUpdateManyInput = {
   id?: Prisma.StringFieldUpdateOperationsInput | string
   projectId?: Prisma.StringFieldUpdateOperationsInput | string
   name?: Prisma.StringFieldUpdateOperationsInput | string
+  isWorkspace?: Prisma.BoolFieldUpdateOperationsInput | boolean
+  flowStateJson?: Prisma.NullableStringFieldUpdateOperationsInput | string | null
   createdAt?: Prisma.DateTimeFieldUpdateOperationsInput | Date | string
   updatedAt?: Prisma.DateTimeFieldUpdateOperationsInput | Date | string
 }
@@ -311,6 +349,8 @@ export type ImageSessionCountOrderByAggregateInput = {
   id?: Prisma.SortOrder
   projectId?: Prisma.SortOrder
   name?: Prisma.SortOrder
+  isWorkspace?: Prisma.SortOrder
+  flowStateJson?: Prisma.SortOrder
   createdAt?: Prisma.SortOrder
   updatedAt?: Prisma.SortOrder
 }
@@ -319,6 +359,8 @@ export type ImageSessionMaxOrderByAggregateInput = {
   id?: Prisma.SortOrder
   projectId?: Prisma.SortOrder
   name?: Prisma.SortOrder
+  isWorkspace?: Prisma.SortOrder
+  flowStateJson?: Prisma.SortOrder
   createdAt?: Prisma.SortOrder
   updatedAt?: Prisma.SortOrder
 }
@@ -327,6 +369,8 @@ export type ImageSessionMinOrderByAggregateInput = {
   id?: Prisma.SortOrder
   projectId?: Prisma.SortOrder
   name?: Prisma.SortOrder
+  isWorkspace?: Prisma.SortOrder
+  flowStateJson?: Prisma.SortOrder
   createdAt?: Prisma.SortOrder
   updatedAt?: Prisma.SortOrder
 }
@@ -378,6 +422,10 @@ export type ImageSessionUncheckedUpdateManyWithoutProjectNestedInput = {
   deleteMany?: Prisma.ImageSessionScalarWhereInput | Prisma.ImageSessionScalarWhereInput[]
 }
 
+export type BoolFieldUpdateOperationsInput = {
+  set?: boolean
+}
+
 export type ImageSessionCreateNestedOneWithoutAssetsInput = {
   create?: Prisma.XOR<Prisma.ImageSessionCreateWithoutAssetsInput, Prisma.ImageSessionUncheckedCreateWithoutAssetsInput>
   connectOrCreate?: Prisma.ImageSessionCreateOrConnectWithoutAssetsInput
@@ -409,6 +457,8 @@ export type ImageSessionUpdateOneRequiredWithoutGenerationsNestedInput = {
 export type ImageSessionCreateWithoutProjectInput = {
   id?: string
   name: string
+  isWorkspace?: boolean
+  flowStateJson?: string | null
   createdAt?: Date | string
   updatedAt?: Date | string
   assets?: Prisma.AssetCreateNestedManyWithoutImageSessionInput
@@ -418,6 +468,8 @@ export type ImageSessionCreateWithoutProjectInput = {
 export type ImageSessionUncheckedCreateWithoutProjectInput = {
   id?: string
   name: string
+  isWorkspace?: boolean
+  flowStateJson?: string | null
   createdAt?: Date | string
   updatedAt?: Date | string
   assets?: Prisma.AssetUncheckedCreateNestedManyWithoutImageSessionInput
@@ -456,6 +508,8 @@ export type ImageSessionScalarWhereInput = {
   id?: Prisma.StringFilter<"ImageSession"> | string
   projectId?: Prisma.StringFilter<"ImageSession"> | string
   name?: Prisma.StringFilter<"ImageSession"> | string
+  isWorkspace?: Prisma.BoolFilter<"ImageSession"> | boolean
+  flowStateJson?: Prisma.StringNullableFilter<"ImageSession"> | string | null
   createdAt?: Prisma.DateTimeFilter<"ImageSession"> | Date | string
   updatedAt?: Prisma.DateTimeFilter<"ImageSession"> | Date | string
 }
@@ -463,6 +517,8 @@ export type ImageSessionScalarWhereInput = {
 export type ImageSessionCreateWithoutAssetsInput = {
   id?: string
   name: string
+  isWorkspace?: boolean
+  flowStateJson?: string | null
   createdAt?: Date | string
   updatedAt?: Date | string
   project: Prisma.ProjectCreateNestedOneWithoutImageSessionsInput
@@ -473,6 +529,8 @@ export type ImageSessionUncheckedCreateWithoutAssetsInput = {
   id?: string
   projectId: string
   name: string
+  isWorkspace?: boolean
+  flowStateJson?: string | null
   createdAt?: Date | string
   updatedAt?: Date | string
   generations?: Prisma.GenerationRunUncheckedCreateNestedManyWithoutImageSessionInput
@@ -497,6 +555,8 @@ export type ImageSessionUpdateToOneWithWhereWithoutAssetsInput = {
 export type ImageSessionUpdateWithoutAssetsInput = {
   id?: Prisma.StringFieldUpdateOperationsInput | string
   name?: Prisma.StringFieldUpdateOperationsInput | string
+  isWorkspace?: Prisma.BoolFieldUpdateOperationsInput | boolean
+  flowStateJson?: Prisma.NullableStringFieldUpdateOperationsInput | string | null
   createdAt?: Prisma.DateTimeFieldUpdateOperationsInput | Date | string
   updatedAt?: Prisma.DateTimeFieldUpdateOperationsInput | Date | string
   project?: Prisma.ProjectUpdateOneRequiredWithoutImageSessionsNestedInput
@@ -507,6 +567,8 @@ export type ImageSessionUncheckedUpdateWithoutAssetsInput = {
   id?: Prisma.StringFieldUpdateOperationsInput | string
   projectId?: Prisma.StringFieldUpdateOperationsInput | string
   name?: Prisma.StringFieldUpdateOperationsInput | string
+  isWorkspace?: Prisma.BoolFieldUpdateOperationsInput | boolean
+  flowStateJson?: Prisma.NullableStringFieldUpdateOperationsInput | string | null
   createdAt?: Prisma.DateTimeFieldUpdateOperationsInput | Date | string
   updatedAt?: Prisma.DateTimeFieldUpdateOperationsInput | Date | string
   generations?: Prisma.GenerationRunUncheckedUpdateManyWithoutImageSessionNestedInput
@@ -515,6 +577,8 @@ export type ImageSessionUncheckedUpdateWithoutAssetsInput = {
 export type ImageSessionCreateWithoutGenerationsInput = {
   id?: string
   name: string
+  isWorkspace?: boolean
+  flowStateJson?: string | null
   createdAt?: Date | string
   updatedAt?: Date | string
   project: Prisma.ProjectCreateNestedOneWithoutImageSessionsInput
@@ -525,6 +589,8 @@ export type ImageSessionUncheckedCreateWithoutGenerationsInput = {
   id?: string
   projectId: string
   name: string
+  isWorkspace?: boolean
+  flowStateJson?: string | null
   createdAt?: Date | string
   updatedAt?: Date | string
   assets?: Prisma.AssetUncheckedCreateNestedManyWithoutImageSessionInput
@@ -549,6 +615,8 @@ export type ImageSessionUpdateToOneWithWhereWithoutGenerationsInput = {
 export type ImageSessionUpdateWithoutGenerationsInput = {
   id?: Prisma.StringFieldUpdateOperationsInput | string
   name?: Prisma.StringFieldUpdateOperationsInput | string
+  isWorkspace?: Prisma.BoolFieldUpdateOperationsInput | boolean
+  flowStateJson?: Prisma.NullableStringFieldUpdateOperationsInput | string | null
   createdAt?: Prisma.DateTimeFieldUpdateOperationsInput | Date | string
   updatedAt?: Prisma.DateTimeFieldUpdateOperationsInput | Date | string
   project?: Prisma.ProjectUpdateOneRequiredWithoutImageSessionsNestedInput
@@ -559,6 +627,8 @@ export type ImageSessionUncheckedUpdateWithoutGenerationsInput = {
   id?: Prisma.StringFieldUpdateOperationsInput | string
   projectId?: Prisma.StringFieldUpdateOperationsInput | string
   name?: Prisma.StringFieldUpdateOperationsInput | string
+  isWorkspace?: Prisma.BoolFieldUpdateOperationsInput | boolean
+  flowStateJson?: Prisma.NullableStringFieldUpdateOperationsInput | string | null
   createdAt?: Prisma.DateTimeFieldUpdateOperationsInput | Date | string
   updatedAt?: Prisma.DateTimeFieldUpdateOperationsInput | Date | string
   assets?: Prisma.AssetUncheckedUpdateManyWithoutImageSessionNestedInput
@@ -567,6 +637,8 @@ export type ImageSessionUncheckedUpdateWithoutGenerationsInput = {
 export type ImageSessionCreateManyProjectInput = {
   id?: string
   name: string
+  isWorkspace?: boolean
+  flowStateJson?: string | null
   createdAt?: Date | string
   updatedAt?: Date | string
 }
@@ -574,6 +646,8 @@ export type ImageSessionCreateManyProjectInput = {
 export type ImageSessionUpdateWithoutProjectInput = {
   id?: Prisma.StringFieldUpdateOperationsInput | string
   name?: Prisma.StringFieldUpdateOperationsInput | string
+  isWorkspace?: Prisma.BoolFieldUpdateOperationsInput | boolean
+  flowStateJson?: Prisma.NullableStringFieldUpdateOperationsInput | string | null
   createdAt?: Prisma.DateTimeFieldUpdateOperationsInput | Date | string
   updatedAt?: Prisma.DateTimeFieldUpdateOperationsInput | Date | string
   assets?: Prisma.AssetUpdateManyWithoutImageSessionNestedInput
@@ -583,6 +657,8 @@ export type ImageSessionUpdateWithoutProjectInput = {
 export type ImageSessionUncheckedUpdateWithoutProjectInput = {
   id?: Prisma.StringFieldUpdateOperationsInput | string
   name?: Prisma.StringFieldUpdateOperationsInput | string
+  isWorkspace?: Prisma.BoolFieldUpdateOperationsInput | boolean
+  flowStateJson?: Prisma.NullableStringFieldUpdateOperationsInput | string | null
   createdAt?: Prisma.DateTimeFieldUpdateOperationsInput | Date | string
   updatedAt?: Prisma.DateTimeFieldUpdateOperationsInput | Date | string
   assets?: Prisma.AssetUncheckedUpdateManyWithoutImageSessionNestedInput
@@ -592,6 +668,8 @@ export type ImageSessionUncheckedUpdateWithoutProjectInput = {
 export type ImageSessionUncheckedUpdateManyWithoutProjectInput = {
   id?: Prisma.StringFieldUpdateOperationsInput | string
   name?: Prisma.StringFieldUpdateOperationsInput | string
+  isWorkspace?: Prisma.BoolFieldUpdateOperationsInput | boolean
+  flowStateJson?: Prisma.NullableStringFieldUpdateOperationsInput | string | null
   createdAt?: Prisma.DateTimeFieldUpdateOperationsInput | Date | string
   updatedAt?: Prisma.DateTimeFieldUpdateOperationsInput | Date | string
 }
@@ -640,6 +718,8 @@ export type ImageSessionSelect<ExtArgs extends runtime.Types.Extensions.Internal
   id?: boolean
   projectId?: boolean
   name?: boolean
+  isWorkspace?: boolean
+  flowStateJson?: boolean
   createdAt?: boolean
   updatedAt?: boolean
   project?: boolean | Prisma.ProjectDefaultArgs<ExtArgs>
@@ -652,6 +732,8 @@ export type ImageSessionSelectCreateManyAndReturn<ExtArgs extends runtime.Types.
   id?: boolean
   projectId?: boolean
   name?: boolean
+  isWorkspace?: boolean
+  flowStateJson?: boolean
   createdAt?: boolean
   updatedAt?: boolean
   project?: boolean | Prisma.ProjectDefaultArgs<ExtArgs>
@@ -661,6 +743,8 @@ export type ImageSessionSelectUpdateManyAndReturn<ExtArgs extends runtime.Types.
   id?: boolean
   projectId?: boolean
   name?: boolean
+  isWorkspace?: boolean
+  flowStateJson?: boolean
   createdAt?: boolean
   updatedAt?: boolean
   project?: boolean | Prisma.ProjectDefaultArgs<ExtArgs>
@@ -670,11 +754,13 @@ export type ImageSessionSelectScalar = {
   id?: boolean
   projectId?: boolean
   name?: boolean
+  isWorkspace?: boolean
+  flowStateJson?: boolean
   createdAt?: boolean
   updatedAt?: boolean
 }
 
-export type ImageSessionOmit<ExtArgs extends runtime.Types.Extensions.InternalArgs = runtime.Types.Extensions.DefaultArgs> = runtime.Types.Extensions.GetOmit<"id" | "projectId" | "name" | "createdAt" | "updatedAt", ExtArgs["result"]["imageSession"]>
+export type ImageSessionOmit<ExtArgs extends runtime.Types.Extensions.InternalArgs = runtime.Types.Extensions.DefaultArgs> = runtime.Types.Extensions.GetOmit<"id" | "projectId" | "name" | "isWorkspace" | "flowStateJson" | "createdAt" | "updatedAt", ExtArgs["result"]["imageSession"]>
 export type ImageSessionInclude<ExtArgs extends runtime.Types.Extensions.InternalArgs = runtime.Types.Extensions.DefaultArgs> = {
   project?: boolean | Prisma.ProjectDefaultArgs<ExtArgs>
   assets?: boolean | Prisma.ImageSession$assetsArgs<ExtArgs>
@@ -699,6 +785,8 @@ export type $ImageSessionPayload<ExtArgs extends runtime.Types.Extensions.Intern
     id: string
     projectId: string
     name: string
+    isWorkspace: boolean
+    flowStateJson: string | null
     createdAt: Date
     updatedAt: Date
   }, ExtArgs["result"]["imageSession"]>
@@ -1130,6 +1218,8 @@ export interface ImageSessionFieldRefs {
   readonly id: Prisma.FieldRef<"ImageSession", 'String'>
   readonly projectId: Prisma.FieldRef<"ImageSession", 'String'>
   readonly name: Prisma.FieldRef<"ImageSession", 'String'>
+  readonly isWorkspace: Prisma.FieldRef<"ImageSession", 'Boolean'>
+  readonly flowStateJson: Prisma.FieldRef<"ImageSession", 'String'>
   readonly createdAt: Prisma.FieldRef<"ImageSession", 'DateTime'>
   readonly updatedAt: Prisma.FieldRef<"ImageSession", 'DateTime'>
 }

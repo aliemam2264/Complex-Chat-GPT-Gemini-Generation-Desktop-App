@@ -98,7 +98,8 @@ export class GeminiBrowserImageProvider implements ImageProvider {
 
       const context = await chromium.launchPersistentContext(this.userDataDirectory, {
         executablePath,
-        headless: false,
+        // Keep automation fully backgrounded; manual login remains headed.
+        headless: true,
 
         viewport: {
           width: 1440,
@@ -1383,8 +1384,10 @@ export class GeminiBrowserImageProvider implements ImageProvider {
         console.log("[Gemini] Composer cleared; waiting for stronger submission evidence...");
       }
 
-      if (await this.isGeminiGenerating(page)) {
-        console.log("[Gemini] Submission confirmed because Gemini started processing.");
+      if (!composerText && (await this.isGeminiGenerating(page))) {
+        console.log(
+          "[Gemini] Submission confirmed because the composer cleared and Gemini started processing.",
+        );
         return true;
       }
 
@@ -1614,10 +1617,25 @@ ${prompt}
       const url = request.url();
 
       if (
-        /StreamGenerate|GenerateContent|BardFrontendService|batchexecute|conversation|generate/i.test(
+        !/StreamGenerate|GenerateContent|BardFrontendService|batchexecute|conversation|generate/i.test(
           url,
         )
       ) {
+        return;
+      }
+
+      /*
+       * Upload/attachment processing can hit endpoints whose URLs also contain
+       * words such as `generate` or `conversation`. The old URL-only check
+       * could therefore claim the prompt was submitted when Gemini had not
+       * created a chat at all. Require the outgoing request body to contain a
+       * distinctive part of THIS prompt before accepting network activity as
+       * submission evidence.
+       */
+      const body = request.postData() ?? "";
+      const normalizedBody = body.replace(/\\n|\r?\n/g, " ").replace(/\s+/g, " ");
+
+      if (normalizedBody.includes("Edit the attached image according to the following instructions.")) {
         networkSubmitted = true;
       }
     };
@@ -1703,9 +1721,50 @@ ${prompt}
         }
 
         /*
-         * Some Gemini builds ignore a click while the attachment transitions.
-         * If nothing actually started, wait briefly and retry the whole
-         * fill+send sequence. Never close the page between these attempts.
+         * Current Gemini builds occasionally expose a clickable Send control
+         * that absorbs the click without dispatching the message. If a
+         * VERIFIED click produced zero submission evidence for the full wait,
+         * try the keyboard path once on the same composer before restarting
+         * the whole attempt. This avoids the "Complete with source image"
+         * failure mode while still refusing to claim success without real chat
+         * activity.
+         */
+        if (clickedSend) {
+          console.warn(
+            `[Gemini] Send click on attempt ${attempt}/3 produced no activity. Trying Enter fallback before retrying.`,
+          );
+
+          const currentText = (await this.getComposerText(composer)).trim();
+          if (!currentText) {
+            await composer.fill(finalPrompt);
+            await composer.dispatchEvent("input").catch(() => undefined);
+          }
+
+          networkSubmitted = false;
+          submissionArmed = true;
+          await composer.click({ force: true }).catch(() => undefined);
+          await composer.press("Enter");
+
+          const enterSubmitted = await this.waitForPromptSubmissionEvidence(
+            page,
+            composer,
+            {
+              ...baseline,
+              networkSubmitted: () => networkSubmitted,
+            },
+            12_000,
+          );
+
+          if (enterSubmitted) {
+            console.log("[Gemini] Prompt submission confirmed via Enter fallback.");
+            return;
+          }
+        }
+
+        /*
+         * Some Gemini builds ignore input while the attachment transitions. If
+         * nothing actually started, wait briefly and retry the whole fill+send
+         * sequence. Never close the page between these attempts.
          */
         console.warn(
           `[Gemini] Submission attempt ${attempt}/3 produced no activity. Retrying on the same page...`,
@@ -2134,6 +2193,7 @@ ${prompt}
     let armed = false;
     let best: NetworkImageCandidate | null = null;
     let sourceHash = "";
+    const preArmImageHashes = new Set<string>();
 
     try {
       const sourceBytes = await readFile(sourceImagePath);
@@ -2144,10 +2204,6 @@ ${prompt}
     }
 
     const onResponse = (response: PlaywrightResponse) => {
-      if (!armed) {
-        return;
-      }
-
       void (async () => {
         try {
           const status = response.status();
@@ -2187,17 +2243,35 @@ ${prompt}
             return;
           }
 
-          if (sourceHash) {
-            const responseHash = createHash("sha256")
-              .update(buffer)
-              .digest("hex");
+          const responseHash = createHash("sha256")
+            .update(buffer)
+            .digest("hex");
 
-            if (responseHash === sourceHash) {
-              console.log(
-                "[Gemini] Ignored network image because it matches the uploaded source exactly.",
-              );
-              return;
-            }
+          /*
+           * While uploads are settling, Gemini often downloads/re-encodes the
+           * source image into its own media cache. Those bytes are not always
+           * identical to the original file, so an exact source-file hash is
+           * not sufficient. Remember every substantial image response seen
+           * BEFORE the prompt is actually submitted and never promote one of
+           * those attachment/media-cache responses to a generated result.
+           */
+          if (!armed) {
+            preArmImageHashes.add(responseHash);
+            return;
+          }
+
+          if (sourceHash && responseHash === sourceHash) {
+            console.log(
+              "[Gemini] Ignored network image because it matches the uploaded source exactly.",
+            );
+            return;
+          }
+
+          if (preArmImageHashes.has(responseHash)) {
+            console.log(
+              "[Gemini] Ignored network image because the same media was already observed during source/reference upload.",
+            );
+            return;
           }
 
           const dimensions = this.getImageDimensionsFromBuffer(
@@ -2746,6 +2820,17 @@ ${prompt}
       await this.ensureLoggedIn(page);
 
       /*
+       * Start observing image traffic BEFORE attachments are uploaded. The
+       * capture stays disarmed until a verified prompt submission, but it
+       * fingerprints source/reference media so late attachment requests cannot
+       * be mistaken for the generated result.
+       */
+      networkCapture = await this.startGeneratedImageNetworkCapture(
+        page,
+        input.sourceImagePath,
+      );
+
+      /*
        * 3. Upload the source image on THIS page only.
        */
       console.log("[Gemini] Uploading source image:", input.sourceImagePath);
@@ -2791,21 +2876,10 @@ ${prompt}
         .catch(() => 0);
 
       /*
-       * Production Gemini can render the result in layouts where DOM image
-       * selectors are unstable. Capture large image responses at the network
-       * layer as an independent, full-resolution source of truth.
-       */
-      networkCapture = await this.startGeneratedImageNetworkCapture(
-        page,
-        input.sourceImagePath,
-      );
-
-      /*
        * Do not arm network-result capture while the source/reference uploads
-       * are still settling. Gemini may request a transformed copy of the
-       * uploaded source after the attachment UI looks ready; capturing that
-       * late attachment request was able to masquerade as a generated result.
-       * We arm the listener only after a VERIFIED prompt submission below.
+       * are still settling. The listener above has already fingerprinted that
+       * traffic, but it will only expose candidates after a VERIFIED prompt
+       * submission below.
        */
 
       /*
@@ -2815,6 +2889,10 @@ ${prompt}
        * with a login error instead of waiting/retrying for minutes.
        */
       await this.ensureLoggedIn(page);
+
+      // Let any final source/reference media-cache requests settle while the
+      // network capture is still disarmed/fingerprinting attachment traffic.
+      await page.waitForTimeout(1_000);
 
       /*
        * 5. Send prompt on this independent Gemini chat.

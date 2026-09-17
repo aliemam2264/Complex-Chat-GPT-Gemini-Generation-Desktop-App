@@ -25,6 +25,8 @@ export type ImageSession = {
   projectId: string;
 
   name: string;
+  isWorkspace?: boolean;
+  flowState?: unknown;
 
   assets: Asset[];
 

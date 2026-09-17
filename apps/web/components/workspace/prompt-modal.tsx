@@ -119,7 +119,7 @@ export function PromptModal({ open, generation, starting = false, onClose, onGen
     Boolean(
       generation.imageProvider === "GEMINI_BROWSER" ||
       generation.progressStage?.startsWith("GEMINI_") ||
-      generation.progressStage === "SAVING_VERSION",
+      (generation.progressStage === "SAVING_OUTPUT" || generation.progressStage === "SAVING_VERSION"),
     );
 
   const promptFailed = generation?.status === "FAILED" && !geminiFailed;

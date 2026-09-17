@@ -86,6 +86,8 @@ export const ImageSessionScalarFieldEnum = {
   id: 'id',
   projectId: 'projectId',
   name: 'name',
+  isWorkspace: 'isWorkspace',
+  flowStateJson: 'flowStateJson',
   createdAt: 'createdAt',
   updatedAt: 'updatedAt'
 } as const
@@ -122,6 +124,8 @@ export const GenerationRunScalarFieldEnum = {
   promptRevision: 'promptRevision',
   promptProvider: 'promptProvider',
   imageProvider: 'imageProvider',
+  flowNodeId: 'flowNodeId',
+  keepOutput: 'keepOutput',
   status: 'status',
   progressStage: 'progressStage',
   progressMessage: 'progressMessage',

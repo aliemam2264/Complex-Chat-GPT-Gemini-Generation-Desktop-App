@@ -86,13 +86,67 @@ export async function createProject(request: Request, response: Response) {
     });
   }
 
-  const project = await prisma.project.create({
-    data: parsed.data,
+  const project = await prisma.$transaction(async (transaction) => {
+    const createdProject = await transaction.project.create({
+      data: parsed.data,
+    });
+
+    await transaction.imageSession.create({
+      data: {
+        projectId: createdProject.id,
+        name: createdProject.name,
+        isWorkspace: true,
+      },
+    });
+
+    return createdProject;
   });
 
   return response.status(201).json({
     success: true,
     data: project,
+  });
+}
+
+export async function ensureProjectWorkspace(request: Request, response: Response) {
+  const { projectId } = request.params;
+
+  const project = await prisma.project.findUnique({
+    where: { id: projectId },
+    select: { id: true, name: true },
+  });
+
+  if (!project) {
+    return response.status(404).json({ success: false, message: "Project not found." });
+  }
+
+  let workspace = await prisma.imageSession.findFirst({
+    where: { projectId, isWorkspace: true },
+    orderBy: { updatedAt: "desc" },
+  });
+
+  if (!workspace) {
+    const latestSession = await prisma.imageSession.findFirst({
+      where: { projectId },
+      orderBy: { updatedAt: "desc" },
+    });
+
+    workspace = latestSession
+      ? await prisma.imageSession.update({
+          where: { id: latestSession.id },
+          data: { isWorkspace: true },
+        })
+      : await prisma.imageSession.create({
+          data: { projectId, name: project.name, isWorkspace: true },
+        });
+  }
+
+  return response.json({
+    success: true,
+    data: {
+      projectId,
+      sessionId: workspace.id,
+    },
   });
 }
 

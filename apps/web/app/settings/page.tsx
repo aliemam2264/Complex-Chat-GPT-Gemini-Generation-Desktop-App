@@ -181,6 +181,65 @@ export default function SettingsPage() {
     }
   }
 
+  useEffect(() => {
+    if (!waitingForChatGPTLogin) {
+      return;
+    }
+
+    let cancelled = false;
+    let timer: ReturnType<typeof setTimeout> | null = null;
+    let checking = false;
+    let attempts = 0;
+    const maxAttempts = 40;
+
+    const poll = async () => {
+      if (cancelled || checking) {
+        return;
+      }
+
+      // Never leave Settings in an infinite connection-check loop. Forty
+      // attempts at 1.5s is about one minute; after that the user can press
+      // Check connection manually without hammering ChatGPT forever.
+      if (attempts >= maxAttempts) {
+        setWaitingForChatGPTLogin(false);
+        return;
+      }
+
+      attempts += 1;
+      checking = true;
+
+      try {
+        const result = await chatGPTStatus.refetch();
+
+        if (cancelled) {
+          return;
+        }
+
+        if (result.data?.connected) {
+          setWaitingForChatGPTLogin(false);
+          return;
+        }
+      } catch (error) {
+        console.error("Could not auto-check ChatGPT connection:", error);
+      } finally {
+        checking = false;
+      }
+
+      if (!cancelled && attempts < maxAttempts) {
+        timer = setTimeout(poll, 1500);
+      } else if (!cancelled) {
+        setWaitingForChatGPTLogin(false);
+      }
+    };
+
+    timer = setTimeout(poll, 1200);
+
+    return () => {
+      cancelled = true;
+      if (timer) clearTimeout(timer);
+    };
+  }, [waitingForChatGPTLogin]);
+
   async function handleCheckChatGPTConnection() {
     try {
       const result = await chatGPTStatus.refetch();
@@ -450,8 +509,8 @@ export default function SettingsPage() {
             {/* ChatGPT Login Message */}
             {waitingForChatGPTLogin && (
               <div className="mt-3 rounded-xl border border-[var(--border)] bg-[var(--surface-1)] px-4 py-3 text-xs leading-5 text-[var(--foreground-muted)]">
-                Sign in to ChatGPT in the opened Chrome window, then close Chrome and click{" "}
-                <span className="font-medium text-[var(--foreground)]">Check connection</span>.
+                Sign in to ChatGPT in the opened Chrome window. Eskander checks the same persistent session automatically and hides the automation window as soon as the account is detected. You can also click{" "}
+                <span className="font-medium text-[var(--foreground)]">Check connection</span> manually.
               </div>
             )}
 
@@ -460,6 +519,18 @@ export default function SettingsPage() {
               <div className="mt-3 rounded-xl border border-[var(--border)] bg-[var(--surface-1)] px-4 py-3 text-xs leading-5 text-[var(--foreground-muted)]">
                 Sign in to Gemini in the opened Chrome window, then close Chrome and click{" "}
                 <span className="font-medium text-[var(--foreground)]">Check connection</span>.
+              </div>
+            )}
+
+            {waitingForChatGPTLogin && !chatGPTStatus.isFetching && chatGPTStatus.data && !chatGPTStatus.data.connected && (
+              <div className="mt-3 rounded-xl border border-amber-500/30 bg-amber-500/5 px-4 py-3 text-xs text-amber-600">
+                {chatGPTStatus.data.message}
+              </div>
+            )}
+
+            {chatGPTStatus.isError && (
+              <div className="mt-3 rounded-xl border border-red-500/30 bg-red-500/5 px-4 py-3 text-xs text-red-500">
+                {chatGPTStatus.error instanceof Error ? chatGPTStatus.error.message : "Could not check ChatGPT connection."}
               </div>
             )}
 

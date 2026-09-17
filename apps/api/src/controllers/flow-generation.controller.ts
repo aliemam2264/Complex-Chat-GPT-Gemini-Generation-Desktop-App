@@ -10,6 +10,7 @@ import { prisma } from "@eskander/database";
 import { getStorageRoot } from "../config/storage";
 import { imageJobManager } from "../services/background-job-manager";
 import { getEffectivePromptPreset } from "../services/prompt-preset-settings";
+import { stageRoleAwareImages } from "../services/role-aware-images";
 import { chatGPTPromptProvider, runGeminiJob } from "./generation.controller";
 
 type SessionParams = {
@@ -70,6 +71,8 @@ const flowPromptSchema = z.object({
 
 const flowGenerationSchema = flowPromptSchema.extend({
   refinedPrompt: z.string().trim().min(10, "Refined prompt is required.").max(12000),
+  imageProvider: z.enum(["GEMINI_BROWSER", "CHATGPT_BROWSER"]).default("GEMINI_BROWSER"),
+  flowNodeId: z.string().trim().min(1).max(200).optional(),
 });
 
 const referenceExtensionByMimeType: Record<string, string> = {
@@ -198,6 +201,7 @@ export async function refineFlowPrompt(request: Request<SessionParams>, response
   const temporaryDirectory = join(getStorageRoot(), "flow-temp", randomUUID());
   const temporaryLegacyReferences: Array<{ path: string; fileName: string; mimeType: string }> = [];
   const abortController = new AbortController();
+  let stagedImages: Awaited<ReturnType<typeof stageRoleAwareImages>> | null = null;
 
   const abortIfRequestCloses = () => {
     if (!response.writableEnded) abortController.abort();
@@ -236,22 +240,35 @@ export async function refineFlowPrompt(request: Request<SessionParams>, response
     const preservePresetPrompt = await getEffectivePromptPreset(parsed.data.preserveMode);
     const storageRoot = getStorageRoot();
 
+    const assistantReferences = [
+      ...storedReferences.map((reference) => ({
+        absolutePath: join(storageRoot, reference.filePath),
+        mimeType: reference.mimeType,
+      })),
+      ...temporaryLegacyReferences.map((reference) => ({
+        absolutePath: reference.path,
+        mimeType: reference.mimeType,
+      })),
+    ].slice(0, 5);
+
+    stagedImages = await stageRoleAwareImages({
+      source: { absolutePath: join(storageRoot, sourceAsset.filePath), mimeType: sourceAsset.mimeType },
+      references: assistantReferences,
+    });
+
     const refinedPrompt = await chatGPTPromptProvider.generate({
       instruction: parsed.data.instruction,
       preserveMode: parsed.data.preserveMode,
       preserveEverythingElse:
         parsed.data.preserveMode === "NO_RESTRICTION" ? false : parsed.data.preserveEverythingElse,
       preservePresetPrompt,
-      sourceImagePath: join(storageRoot, sourceAsset.filePath),
+      sourceImagePath: stagedImages.sourcePath,
       sourceMimeType: sourceAsset.mimeType,
-      referenceImages: [
-        ...storedReferences.map((reference) => ({
-          path: join(storageRoot, reference.filePath),
-          fileName: reference.fileName,
-          mimeType: reference.mimeType,
-        })),
-        ...temporaryLegacyReferences,
-      ].slice(0, 5),
+      referenceImages: stagedImages.referencePaths.map((path, index) => ({
+        path,
+        fileName: `ref ${index + 1}`,
+        mimeType: assistantReferences[index]?.mimeType ?? "image/png",
+      })),
       signal: abortController.signal,
     });
 
@@ -281,6 +298,7 @@ export async function refineFlowPrompt(request: Request<SessionParams>, response
     request.off("aborted", abortIfRequestCloses);
     response.off("close", abortIfRequestCloses);
 
+    await stagedImages?.cleanup();
     await rm(temporaryDirectory, {
       recursive: true,
       force: true,
@@ -419,10 +437,11 @@ export async function createFlowImageGeneration(request: Request<SessionParams>,
         parsed.data.preserveMode === "NO_RESTRICTION" ? false : parsed.data.preserveEverythingElse,
       promptRevision: 1,
       promptProvider: "CHATGPT_BROWSER",
-      imageProvider: "GEMINI_BROWSER",
+      imageProvider: parsed.data.imageProvider,
+      flowNodeId: parsed.data.flowNodeId ?? null,
       status: "PROMPT_READY",
       progressStage: "PROMPT_READY",
-      progressMessage: "Prompt ready. Queuing Gemini...",
+      progressMessage: `Prompt ready. Queuing ${parsed.data.imageProvider === "CHATGPT_BROWSER" ? "ChatGPT" : "Gemini"}...`,
       errorMessage: null,
       attemptCount: 1,
       lastAttemptAt: now,
@@ -498,14 +517,14 @@ export async function createFlowImageGeneration(request: Request<SessionParams>,
       data: {
         status: "FAILED",
         progressStage: "FAILED",
-        progressMessage: "Gemini job could not be queued.",
-        errorMessage: "Gemini job could not be queued.",
+        progressMessage: "Image generation job could not be queued.",
+        errorMessage: "Image generation job could not be queued.",
       },
     });
 
     return response.status(409).json({
       success: false,
-      message: "Gemini job could not be queued. Try again.",
+      message: "Image generation job could not be queued. Try again.",
     });
   }
 

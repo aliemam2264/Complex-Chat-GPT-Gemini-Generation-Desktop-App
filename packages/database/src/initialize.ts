@@ -1,6 +1,6 @@
 import { prisma } from "./client";
 
-const SCHEMA_VERSION = 2;
+const SCHEMA_VERSION = 3;
 
 const schemaStatements = [
   `CREATE TABLE IF NOT EXISTS "_EskanderMeta" (
@@ -18,6 +18,8 @@ const schemaStatements = [
     "id" TEXT NOT NULL PRIMARY KEY,
     "projectId" TEXT NOT NULL,
     "name" TEXT NOT NULL,
+    "isWorkspace" INTEGER NOT NULL DEFAULT 0,
+    "flowStateJson" TEXT,
     "createdAt" DATETIME NOT NULL,
     "updatedAt" DATETIME NOT NULL,
     CONSTRAINT "ImageSession_projectId_fkey"
@@ -55,6 +57,8 @@ const schemaStatements = [
     "promptRevision" INTEGER NOT NULL DEFAULT 0,
     "promptProvider" TEXT,
     "imageProvider" TEXT,
+    "flowNodeId" TEXT,
+    "keepOutput" INTEGER NOT NULL DEFAULT 0,
     "status" TEXT NOT NULL DEFAULT 'PENDING',
     "progressStage" TEXT,
     "progressMessage" TEXT,
@@ -105,6 +109,12 @@ const schemaStatements = [
   `CREATE INDEX IF NOT EXISTS "GenerationReferenceImage_generationRunId_idx" ON "GenerationReferenceImage"("generationRunId")`,
 ];
 
+async function ensureColumn(table: string, column: string, definition: string) {
+  const rows = await prisma.$queryRawUnsafe<Array<{ name: string }>>(`PRAGMA table_info("${table}")`);
+  if (rows.some((row) => row.name === column)) return;
+  await prisma.$executeRawUnsafe(`ALTER TABLE "${table}" ADD COLUMN "${column}" ${definition}`);
+}
+
 export async function initializeDatabase() {
   await prisma.$executeRawUnsafe("PRAGMA foreign_keys = ON");
   await prisma.$executeRawUnsafe("PRAGMA busy_timeout = 5000");
@@ -116,6 +126,21 @@ export async function initializeDatabase() {
   for (const statement of schemaStatements) {
     await prisma.$executeRawUnsafe(statement);
   }
+
+  // Upgrade existing installed SQLite databases in place. CREATE TABLE IF NOT EXISTS
+  // does not add new columns, so every additive schema change must be guarded.
+  await ensureColumn("ImageSession", "isWorkspace", "INTEGER NOT NULL DEFAULT 0");
+  await ensureColumn("ImageSession", "flowStateJson", "TEXT");
+  await ensureColumn("GenerationRun", "flowNodeId", "TEXT");
+  await ensureColumn("GenerationRun", "keepOutput", "INTEGER NOT NULL DEFAULT 0");
+
+  // Build this index only after flowNodeId is guaranteed to exist on upgraded DBs.
+  // Drop first in case an older SQLite build accepted the quoted unknown column
+  // as a constant-expression index before the migration added the real column.
+  await prisma.$executeRawUnsafe(`DROP INDEX IF EXISTS "GenerationRun_flowNodeId_idx"`);
+  await prisma.$executeRawUnsafe(
+    `CREATE INDEX IF NOT EXISTS "GenerationRun_flowNodeId_idx" ON "GenerationRun"("flowNodeId")`,
+  );
 
   await prisma.$executeRawUnsafe(
     `INSERT INTO "_EskanderMeta" ("key", "value") VALUES ('schemaVersion', ?)

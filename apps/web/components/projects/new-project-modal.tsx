@@ -1,6 +1,7 @@
 "use client";
 
 import { FormEvent, useState } from "react";
+import { useRouter } from "next/navigation";
 
 import { useCreateProject } from "@/hooks/use-projects";
 
@@ -15,6 +16,7 @@ export function NewProjectModal({ open, onClose }: NewProjectModalProps) {
   const [description, setDescription] = useState("");
 
   const createProject = useCreateProject();
+  const router = useRouter();
 
   if (!open) {
     return null;
@@ -27,7 +29,7 @@ export function NewProjectModal({ open, onClose }: NewProjectModalProps) {
       return;
     }
 
-    await createProject.mutateAsync({
+    const project = await createProject.mutateAsync({
       name: name.trim(),
 
       description: description.trim() || undefined,
@@ -37,6 +39,7 @@ export function NewProjectModal({ open, onClose }: NewProjectModalProps) {
     setDescription("");
 
     onClose();
+    router.push(`/projects/${project.id}`);
   }
 
   return (

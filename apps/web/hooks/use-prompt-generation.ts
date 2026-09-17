@@ -106,6 +106,8 @@ type CreateFlowImageGenerationInput = FlowReferenceIds & {
   refinedPrompt: string;
   preserveMode: PreserveMode;
   preserveEverythingElse: boolean;
+  imageProvider: "GEMINI_BROWSER" | "CHATGPT_BROWSER";
+  flowNodeId: string;
 };
 
 function appendFlowReferenceIds(
@@ -157,6 +159,8 @@ export function useCreateFlowImageGeneration() {
       refinedPrompt,
       preserveMode,
       preserveEverythingElse,
+      imageProvider,
+      flowNodeId,
       referenceAssetIds = [],
       referenceImageIds = [],
     }: CreateFlowImageGenerationInput) => {
@@ -167,6 +171,8 @@ export function useCreateFlowImageGeneration() {
       formData.append("refinedPrompt", refinedPrompt);
       formData.append("preserveMode", preserveMode);
       formData.append("preserveEverythingElse", String(preserveEverythingElse));
+      formData.append("imageProvider", imageProvider);
+      formData.append("flowNodeId", flowNodeId);
       appendFlowReferenceIds(formData, referenceAssetIds, referenceImageIds);
 
       return apiUpload<GenerationRun>(
@@ -200,5 +206,13 @@ export function useRetryGeneration() {
   return useMutation({
     mutationFn: (generationId: string) =>
       apiPost<GenerationRun, Record<string, never>>(`/api/generations/${generationId}/retry`, {}),
+  });
+}
+
+
+export function useKeepGenerationOutput() {
+  return useMutation({
+    mutationFn: (generationId: string) =>
+      apiPost<GenerationRun, Record<string, never>>(`/api/generations/${generationId}/keep`, {}),
   });
 }

@@ -49,6 +49,8 @@ export type GenerationRunMinAggregateOutputType = {
   promptRevision: number | null
   promptProvider: $Enums.ProviderType | null
   imageProvider: $Enums.ProviderType | null
+  flowNodeId: string | null
+  keepOutput: boolean | null
   status: $Enums.GenerationStatus | null
   progressStage: string | null
   progressMessage: string | null
@@ -76,6 +78,8 @@ export type GenerationRunMaxAggregateOutputType = {
   promptRevision: number | null
   promptProvider: $Enums.ProviderType | null
   imageProvider: $Enums.ProviderType | null
+  flowNodeId: string | null
+  keepOutput: boolean | null
   status: $Enums.GenerationStatus | null
   progressStage: string | null
   progressMessage: string | null
@@ -103,6 +107,8 @@ export type GenerationRunCountAggregateOutputType = {
   promptRevision: number
   promptProvider: number
   imageProvider: number
+  flowNodeId: number
+  keepOutput: number
   status: number
   progressStage: number
   progressMessage: number
@@ -142,6 +148,8 @@ export type GenerationRunMinAggregateInputType = {
   promptRevision?: true
   promptProvider?: true
   imageProvider?: true
+  flowNodeId?: true
+  keepOutput?: true
   status?: true
   progressStage?: true
   progressMessage?: true
@@ -169,6 +177,8 @@ export type GenerationRunMaxAggregateInputType = {
   promptRevision?: true
   promptProvider?: true
   imageProvider?: true
+  flowNodeId?: true
+  keepOutput?: true
   status?: true
   progressStage?: true
   progressMessage?: true
@@ -196,6 +206,8 @@ export type GenerationRunCountAggregateInputType = {
   promptRevision?: true
   promptProvider?: true
   imageProvider?: true
+  flowNodeId?: true
+  keepOutput?: true
   status?: true
   progressStage?: true
   progressMessage?: true
@@ -310,6 +322,8 @@ export type GenerationRunGroupByOutputType = {
   promptRevision: number
   promptProvider: $Enums.ProviderType | null
   imageProvider: $Enums.ProviderType | null
+  flowNodeId: string | null
+  keepOutput: boolean
   status: $Enums.GenerationStatus
   progressStage: string | null
   progressMessage: string | null
@@ -360,6 +374,8 @@ export type GenerationRunWhereInput = {
   promptRevision?: Prisma.IntFilter<"GenerationRun"> | number
   promptProvider?: Prisma.EnumProviderTypeNullableFilter<"GenerationRun"> | $Enums.ProviderType | null
   imageProvider?: Prisma.EnumProviderTypeNullableFilter<"GenerationRun"> | $Enums.ProviderType | null
+  flowNodeId?: Prisma.StringNullableFilter<"GenerationRun"> | string | null
+  keepOutput?: Prisma.BoolFilter<"GenerationRun"> | boolean
   status?: Prisma.EnumGenerationStatusFilter<"GenerationRun"> | $Enums.GenerationStatus
   progressStage?: Prisma.StringNullableFilter<"GenerationRun"> | string | null
   progressMessage?: Prisma.StringNullableFilter<"GenerationRun"> | string | null
@@ -392,6 +408,8 @@ export type GenerationRunOrderByWithRelationInput = {
   promptRevision?: Prisma.SortOrder
   promptProvider?: Prisma.SortOrderInput | Prisma.SortOrder
   imageProvider?: Prisma.SortOrderInput | Prisma.SortOrder
+  flowNodeId?: Prisma.SortOrderInput | Prisma.SortOrder
+  keepOutput?: Prisma.SortOrder
   status?: Prisma.SortOrder
   progressStage?: Prisma.SortOrderInput | Prisma.SortOrder
   progressMessage?: Prisma.SortOrderInput | Prisma.SortOrder
@@ -427,6 +445,8 @@ export type GenerationRunWhereUniqueInput = Prisma.AtLeast<{
   promptRevision?: Prisma.IntFilter<"GenerationRun"> | number
   promptProvider?: Prisma.EnumProviderTypeNullableFilter<"GenerationRun"> | $Enums.ProviderType | null
   imageProvider?: Prisma.EnumProviderTypeNullableFilter<"GenerationRun"> | $Enums.ProviderType | null
+  flowNodeId?: Prisma.StringNullableFilter<"GenerationRun"> | string | null
+  keepOutput?: Prisma.BoolFilter<"GenerationRun"> | boolean
   status?: Prisma.EnumGenerationStatusFilter<"GenerationRun"> | $Enums.GenerationStatus
   progressStage?: Prisma.StringNullableFilter<"GenerationRun"> | string | null
   progressMessage?: Prisma.StringNullableFilter<"GenerationRun"> | string | null
@@ -459,6 +479,8 @@ export type GenerationRunOrderByWithAggregationInput = {
   promptRevision?: Prisma.SortOrder
   promptProvider?: Prisma.SortOrderInput | Prisma.SortOrder
   imageProvider?: Prisma.SortOrderInput | Prisma.SortOrder
+  flowNodeId?: Prisma.SortOrderInput | Prisma.SortOrder
+  keepOutput?: Prisma.SortOrder
   status?: Prisma.SortOrder
   progressStage?: Prisma.SortOrderInput | Prisma.SortOrder
   progressMessage?: Prisma.SortOrderInput | Prisma.SortOrder
@@ -494,6 +516,8 @@ export type GenerationRunScalarWhereWithAggregatesInput = {
   promptRevision?: Prisma.IntWithAggregatesFilter<"GenerationRun"> | number
   promptProvider?: Prisma.EnumProviderTypeNullableWithAggregatesFilter<"GenerationRun"> | $Enums.ProviderType | null
   imageProvider?: Prisma.EnumProviderTypeNullableWithAggregatesFilter<"GenerationRun"> | $Enums.ProviderType | null
+  flowNodeId?: Prisma.StringNullableWithAggregatesFilter<"GenerationRun"> | string | null
+  keepOutput?: Prisma.BoolWithAggregatesFilter<"GenerationRun"> | boolean
   status?: Prisma.EnumGenerationStatusWithAggregatesFilter<"GenerationRun"> | $Enums.GenerationStatus
   progressStage?: Prisma.StringNullableWithAggregatesFilter<"GenerationRun"> | string | null
   progressMessage?: Prisma.StringNullableWithAggregatesFilter<"GenerationRun"> | string | null
@@ -517,6 +541,8 @@ export type GenerationRunCreateInput = {
   promptRevision?: number
   promptProvider?: $Enums.ProviderType | null
   imageProvider?: $Enums.ProviderType | null
+  flowNodeId?: string | null
+  keepOutput?: boolean
   status?: $Enums.GenerationStatus
   progressStage?: string | null
   progressMessage?: string | null
@@ -549,6 +575,8 @@ export type GenerationRunUncheckedCreateInput = {
   promptRevision?: number
   promptProvider?: $Enums.ProviderType | null
   imageProvider?: $Enums.ProviderType | null
+  flowNodeId?: string | null
+  keepOutput?: boolean
   status?: $Enums.GenerationStatus
   progressStage?: string | null
   progressMessage?: string | null
@@ -573,6 +601,8 @@ export type GenerationRunUpdateInput = {
   promptRevision?: Prisma.IntFieldUpdateOperationsInput | number
   promptProvider?: Prisma.NullableEnumProviderTypeFieldUpdateOperationsInput | $Enums.ProviderType | null
   imageProvider?: Prisma.NullableEnumProviderTypeFieldUpdateOperationsInput | $Enums.ProviderType | null
+  flowNodeId?: Prisma.NullableStringFieldUpdateOperationsInput | string | null
+  keepOutput?: Prisma.BoolFieldUpdateOperationsInput | boolean
   status?: Prisma.EnumGenerationStatusFieldUpdateOperationsInput | $Enums.GenerationStatus
   progressStage?: Prisma.NullableStringFieldUpdateOperationsInput | string | null
   progressMessage?: Prisma.NullableStringFieldUpdateOperationsInput | string | null
@@ -605,6 +635,8 @@ export type GenerationRunUncheckedUpdateInput = {
   promptRevision?: Prisma.IntFieldUpdateOperationsInput | number
   promptProvider?: Prisma.NullableEnumProviderTypeFieldUpdateOperationsInput | $Enums.ProviderType | null
   imageProvider?: Prisma.NullableEnumProviderTypeFieldUpdateOperationsInput | $Enums.ProviderType | null
+  flowNodeId?: Prisma.NullableStringFieldUpdateOperationsInput | string | null
+  keepOutput?: Prisma.BoolFieldUpdateOperationsInput | boolean
   status?: Prisma.EnumGenerationStatusFieldUpdateOperationsInput | $Enums.GenerationStatus
   progressStage?: Prisma.NullableStringFieldUpdateOperationsInput | string | null
   progressMessage?: Prisma.NullableStringFieldUpdateOperationsInput | string | null
@@ -633,6 +665,8 @@ export type GenerationRunCreateManyInput = {
   promptRevision?: number
   promptProvider?: $Enums.ProviderType | null
   imageProvider?: $Enums.ProviderType | null
+  flowNodeId?: string | null
+  keepOutput?: boolean
   status?: $Enums.GenerationStatus
   progressStage?: string | null
   progressMessage?: string | null
@@ -656,6 +690,8 @@ export type GenerationRunUpdateManyMutationInput = {
   promptRevision?: Prisma.IntFieldUpdateOperationsInput | number
   promptProvider?: Prisma.NullableEnumProviderTypeFieldUpdateOperationsInput | $Enums.ProviderType | null
   imageProvider?: Prisma.NullableEnumProviderTypeFieldUpdateOperationsInput | $Enums.ProviderType | null
+  flowNodeId?: Prisma.NullableStringFieldUpdateOperationsInput | string | null
+  keepOutput?: Prisma.BoolFieldUpdateOperationsInput | boolean
   status?: Prisma.EnumGenerationStatusFieldUpdateOperationsInput | $Enums.GenerationStatus
   progressStage?: Prisma.NullableStringFieldUpdateOperationsInput | string | null
   progressMessage?: Prisma.NullableStringFieldUpdateOperationsInput | string | null
@@ -683,6 +719,8 @@ export type GenerationRunUncheckedUpdateManyInput = {
   promptRevision?: Prisma.IntFieldUpdateOperationsInput | number
   promptProvider?: Prisma.NullableEnumProviderTypeFieldUpdateOperationsInput | $Enums.ProviderType | null
   imageProvider?: Prisma.NullableEnumProviderTypeFieldUpdateOperationsInput | $Enums.ProviderType | null
+  flowNodeId?: Prisma.NullableStringFieldUpdateOperationsInput | string | null
+  keepOutput?: Prisma.BoolFieldUpdateOperationsInput | boolean
   status?: Prisma.EnumGenerationStatusFieldUpdateOperationsInput | $Enums.GenerationStatus
   progressStage?: Prisma.NullableStringFieldUpdateOperationsInput | string | null
   progressMessage?: Prisma.NullableStringFieldUpdateOperationsInput | string | null
@@ -725,6 +763,8 @@ export type GenerationRunCountOrderByAggregateInput = {
   promptRevision?: Prisma.SortOrder
   promptProvider?: Prisma.SortOrder
   imageProvider?: Prisma.SortOrder
+  flowNodeId?: Prisma.SortOrder
+  keepOutput?: Prisma.SortOrder
   status?: Prisma.SortOrder
   progressStage?: Prisma.SortOrder
   progressMessage?: Prisma.SortOrder
@@ -757,6 +797,8 @@ export type GenerationRunMaxOrderByAggregateInput = {
   promptRevision?: Prisma.SortOrder
   promptProvider?: Prisma.SortOrder
   imageProvider?: Prisma.SortOrder
+  flowNodeId?: Prisma.SortOrder
+  keepOutput?: Prisma.SortOrder
   status?: Prisma.SortOrder
   progressStage?: Prisma.SortOrder
   progressMessage?: Prisma.SortOrder
@@ -784,6 +826,8 @@ export type GenerationRunMinOrderByAggregateInput = {
   promptRevision?: Prisma.SortOrder
   promptProvider?: Prisma.SortOrder
   imageProvider?: Prisma.SortOrder
+  flowNodeId?: Prisma.SortOrder
+  keepOutput?: Prisma.SortOrder
   status?: Prisma.SortOrder
   progressStage?: Prisma.SortOrder
   progressMessage?: Prisma.SortOrder
@@ -970,10 +1014,6 @@ export type EnumPreserveModeFieldUpdateOperationsInput = {
   set?: $Enums.PreserveMode
 }
 
-export type BoolFieldUpdateOperationsInput = {
-  set?: boolean
-}
-
 export type IntFieldUpdateOperationsInput = {
   set?: number
   increment?: number
@@ -1017,6 +1057,8 @@ export type GenerationRunCreateWithoutProjectInput = {
   promptRevision?: number
   promptProvider?: $Enums.ProviderType | null
   imageProvider?: $Enums.ProviderType | null
+  flowNodeId?: string | null
+  keepOutput?: boolean
   status?: $Enums.GenerationStatus
   progressStage?: string | null
   progressMessage?: string | null
@@ -1047,6 +1089,8 @@ export type GenerationRunUncheckedCreateWithoutProjectInput = {
   promptRevision?: number
   promptProvider?: $Enums.ProviderType | null
   imageProvider?: $Enums.ProviderType | null
+  flowNodeId?: string | null
+  keepOutput?: boolean
   status?: $Enums.GenerationStatus
   progressStage?: string | null
   progressMessage?: string | null
@@ -1103,6 +1147,8 @@ export type GenerationRunScalarWhereInput = {
   promptRevision?: Prisma.IntFilter<"GenerationRun"> | number
   promptProvider?: Prisma.EnumProviderTypeNullableFilter<"GenerationRun"> | $Enums.ProviderType | null
   imageProvider?: Prisma.EnumProviderTypeNullableFilter<"GenerationRun"> | $Enums.ProviderType | null
+  flowNodeId?: Prisma.StringNullableFilter<"GenerationRun"> | string | null
+  keepOutput?: Prisma.BoolFilter<"GenerationRun"> | boolean
   status?: Prisma.EnumGenerationStatusFilter<"GenerationRun"> | $Enums.GenerationStatus
   progressStage?: Prisma.StringNullableFilter<"GenerationRun"> | string | null
   progressMessage?: Prisma.StringNullableFilter<"GenerationRun"> | string | null
@@ -1126,6 +1172,8 @@ export type GenerationRunCreateWithoutImageSessionInput = {
   promptRevision?: number
   promptProvider?: $Enums.ProviderType | null
   imageProvider?: $Enums.ProviderType | null
+  flowNodeId?: string | null
+  keepOutput?: boolean
   status?: $Enums.GenerationStatus
   progressStage?: string | null
   progressMessage?: string | null
@@ -1156,6 +1204,8 @@ export type GenerationRunUncheckedCreateWithoutImageSessionInput = {
   promptRevision?: number
   promptProvider?: $Enums.ProviderType | null
   imageProvider?: $Enums.ProviderType | null
+  flowNodeId?: string | null
+  keepOutput?: boolean
   status?: $Enums.GenerationStatus
   progressStage?: string | null
   progressMessage?: string | null
@@ -1205,6 +1255,8 @@ export type GenerationRunCreateWithoutSourceAssetInput = {
   promptRevision?: number
   promptProvider?: $Enums.ProviderType | null
   imageProvider?: $Enums.ProviderType | null
+  flowNodeId?: string | null
+  keepOutput?: boolean
   status?: $Enums.GenerationStatus
   progressStage?: string | null
   progressMessage?: string | null
@@ -1235,6 +1287,8 @@ export type GenerationRunUncheckedCreateWithoutSourceAssetInput = {
   promptRevision?: number
   promptProvider?: $Enums.ProviderType | null
   imageProvider?: $Enums.ProviderType | null
+  flowNodeId?: string | null
+  keepOutput?: boolean
   status?: $Enums.GenerationStatus
   progressStage?: string | null
   progressMessage?: string | null
@@ -1268,6 +1322,8 @@ export type GenerationRunCreateWithoutOutputAssetInput = {
   promptRevision?: number
   promptProvider?: $Enums.ProviderType | null
   imageProvider?: $Enums.ProviderType | null
+  flowNodeId?: string | null
+  keepOutput?: boolean
   status?: $Enums.GenerationStatus
   progressStage?: string | null
   progressMessage?: string | null
@@ -1298,6 +1354,8 @@ export type GenerationRunUncheckedCreateWithoutOutputAssetInput = {
   promptRevision?: number
   promptProvider?: $Enums.ProviderType | null
   imageProvider?: $Enums.ProviderType | null
+  flowNodeId?: string | null
+  keepOutput?: boolean
   status?: $Enums.GenerationStatus
   progressStage?: string | null
   progressMessage?: string | null
@@ -1354,6 +1412,8 @@ export type GenerationRunUpdateWithoutOutputAssetInput = {
   promptRevision?: Prisma.IntFieldUpdateOperationsInput | number
   promptProvider?: Prisma.NullableEnumProviderTypeFieldUpdateOperationsInput | $Enums.ProviderType | null
   imageProvider?: Prisma.NullableEnumProviderTypeFieldUpdateOperationsInput | $Enums.ProviderType | null
+  flowNodeId?: Prisma.NullableStringFieldUpdateOperationsInput | string | null
+  keepOutput?: Prisma.BoolFieldUpdateOperationsInput | boolean
   status?: Prisma.EnumGenerationStatusFieldUpdateOperationsInput | $Enums.GenerationStatus
   progressStage?: Prisma.NullableStringFieldUpdateOperationsInput | string | null
   progressMessage?: Prisma.NullableStringFieldUpdateOperationsInput | string | null
@@ -1384,6 +1444,8 @@ export type GenerationRunUncheckedUpdateWithoutOutputAssetInput = {
   promptRevision?: Prisma.IntFieldUpdateOperationsInput | number
   promptProvider?: Prisma.NullableEnumProviderTypeFieldUpdateOperationsInput | $Enums.ProviderType | null
   imageProvider?: Prisma.NullableEnumProviderTypeFieldUpdateOperationsInput | $Enums.ProviderType | null
+  flowNodeId?: Prisma.NullableStringFieldUpdateOperationsInput | string | null
+  keepOutput?: Prisma.BoolFieldUpdateOperationsInput | boolean
   status?: Prisma.EnumGenerationStatusFieldUpdateOperationsInput | $Enums.GenerationStatus
   progressStage?: Prisma.NullableStringFieldUpdateOperationsInput | string | null
   progressMessage?: Prisma.NullableStringFieldUpdateOperationsInput | string | null
@@ -1408,6 +1470,8 @@ export type GenerationRunCreateWithoutReferenceImagesInput = {
   promptRevision?: number
   promptProvider?: $Enums.ProviderType | null
   imageProvider?: $Enums.ProviderType | null
+  flowNodeId?: string | null
+  keepOutput?: boolean
   status?: $Enums.GenerationStatus
   progressStage?: string | null
   progressMessage?: string | null
@@ -1439,6 +1503,8 @@ export type GenerationRunUncheckedCreateWithoutReferenceImagesInput = {
   promptRevision?: number
   promptProvider?: $Enums.ProviderType | null
   imageProvider?: $Enums.ProviderType | null
+  flowNodeId?: string | null
+  keepOutput?: boolean
   status?: $Enums.GenerationStatus
   progressStage?: string | null
   progressMessage?: string | null
@@ -1478,6 +1544,8 @@ export type GenerationRunUpdateWithoutReferenceImagesInput = {
   promptRevision?: Prisma.IntFieldUpdateOperationsInput | number
   promptProvider?: Prisma.NullableEnumProviderTypeFieldUpdateOperationsInput | $Enums.ProviderType | null
   imageProvider?: Prisma.NullableEnumProviderTypeFieldUpdateOperationsInput | $Enums.ProviderType | null
+  flowNodeId?: Prisma.NullableStringFieldUpdateOperationsInput | string | null
+  keepOutput?: Prisma.BoolFieldUpdateOperationsInput | boolean
   status?: Prisma.EnumGenerationStatusFieldUpdateOperationsInput | $Enums.GenerationStatus
   progressStage?: Prisma.NullableStringFieldUpdateOperationsInput | string | null
   progressMessage?: Prisma.NullableStringFieldUpdateOperationsInput | string | null
@@ -1509,6 +1577,8 @@ export type GenerationRunUncheckedUpdateWithoutReferenceImagesInput = {
   promptRevision?: Prisma.IntFieldUpdateOperationsInput | number
   promptProvider?: Prisma.NullableEnumProviderTypeFieldUpdateOperationsInput | $Enums.ProviderType | null
   imageProvider?: Prisma.NullableEnumProviderTypeFieldUpdateOperationsInput | $Enums.ProviderType | null
+  flowNodeId?: Prisma.NullableStringFieldUpdateOperationsInput | string | null
+  keepOutput?: Prisma.BoolFieldUpdateOperationsInput | boolean
   status?: Prisma.EnumGenerationStatusFieldUpdateOperationsInput | $Enums.GenerationStatus
   progressStage?: Prisma.NullableStringFieldUpdateOperationsInput | string | null
   progressMessage?: Prisma.NullableStringFieldUpdateOperationsInput | string | null
@@ -1535,6 +1605,8 @@ export type GenerationRunCreateManyProjectInput = {
   promptRevision?: number
   promptProvider?: $Enums.ProviderType | null
   imageProvider?: $Enums.ProviderType | null
+  flowNodeId?: string | null
+  keepOutput?: boolean
   status?: $Enums.GenerationStatus
   progressStage?: string | null
   progressMessage?: string | null
@@ -1558,6 +1630,8 @@ export type GenerationRunUpdateWithoutProjectInput = {
   promptRevision?: Prisma.IntFieldUpdateOperationsInput | number
   promptProvider?: Prisma.NullableEnumProviderTypeFieldUpdateOperationsInput | $Enums.ProviderType | null
   imageProvider?: Prisma.NullableEnumProviderTypeFieldUpdateOperationsInput | $Enums.ProviderType | null
+  flowNodeId?: Prisma.NullableStringFieldUpdateOperationsInput | string | null
+  keepOutput?: Prisma.BoolFieldUpdateOperationsInput | boolean
   status?: Prisma.EnumGenerationStatusFieldUpdateOperationsInput | $Enums.GenerationStatus
   progressStage?: Prisma.NullableStringFieldUpdateOperationsInput | string | null
   progressMessage?: Prisma.NullableStringFieldUpdateOperationsInput | string | null
@@ -1588,6 +1662,8 @@ export type GenerationRunUncheckedUpdateWithoutProjectInput = {
   promptRevision?: Prisma.IntFieldUpdateOperationsInput | number
   promptProvider?: Prisma.NullableEnumProviderTypeFieldUpdateOperationsInput | $Enums.ProviderType | null
   imageProvider?: Prisma.NullableEnumProviderTypeFieldUpdateOperationsInput | $Enums.ProviderType | null
+  flowNodeId?: Prisma.NullableStringFieldUpdateOperationsInput | string | null
+  keepOutput?: Prisma.BoolFieldUpdateOperationsInput | boolean
   status?: Prisma.EnumGenerationStatusFieldUpdateOperationsInput | $Enums.GenerationStatus
   progressStage?: Prisma.NullableStringFieldUpdateOperationsInput | string | null
   progressMessage?: Prisma.NullableStringFieldUpdateOperationsInput | string | null
@@ -1615,6 +1691,8 @@ export type GenerationRunUncheckedUpdateManyWithoutProjectInput = {
   promptRevision?: Prisma.IntFieldUpdateOperationsInput | number
   promptProvider?: Prisma.NullableEnumProviderTypeFieldUpdateOperationsInput | $Enums.ProviderType | null
   imageProvider?: Prisma.NullableEnumProviderTypeFieldUpdateOperationsInput | $Enums.ProviderType | null
+  flowNodeId?: Prisma.NullableStringFieldUpdateOperationsInput | string | null
+  keepOutput?: Prisma.BoolFieldUpdateOperationsInput | boolean
   status?: Prisma.EnumGenerationStatusFieldUpdateOperationsInput | $Enums.GenerationStatus
   progressStage?: Prisma.NullableStringFieldUpdateOperationsInput | string | null
   progressMessage?: Prisma.NullableStringFieldUpdateOperationsInput | string | null
@@ -1641,6 +1719,8 @@ export type GenerationRunCreateManyImageSessionInput = {
   promptRevision?: number
   promptProvider?: $Enums.ProviderType | null
   imageProvider?: $Enums.ProviderType | null
+  flowNodeId?: string | null
+  keepOutput?: boolean
   status?: $Enums.GenerationStatus
   progressStage?: string | null
   progressMessage?: string | null
@@ -1664,6 +1744,8 @@ export type GenerationRunUpdateWithoutImageSessionInput = {
   promptRevision?: Prisma.IntFieldUpdateOperationsInput | number
   promptProvider?: Prisma.NullableEnumProviderTypeFieldUpdateOperationsInput | $Enums.ProviderType | null
   imageProvider?: Prisma.NullableEnumProviderTypeFieldUpdateOperationsInput | $Enums.ProviderType | null
+  flowNodeId?: Prisma.NullableStringFieldUpdateOperationsInput | string | null
+  keepOutput?: Prisma.BoolFieldUpdateOperationsInput | boolean
   status?: Prisma.EnumGenerationStatusFieldUpdateOperationsInput | $Enums.GenerationStatus
   progressStage?: Prisma.NullableStringFieldUpdateOperationsInput | string | null
   progressMessage?: Prisma.NullableStringFieldUpdateOperationsInput | string | null
@@ -1694,6 +1776,8 @@ export type GenerationRunUncheckedUpdateWithoutImageSessionInput = {
   promptRevision?: Prisma.IntFieldUpdateOperationsInput | number
   promptProvider?: Prisma.NullableEnumProviderTypeFieldUpdateOperationsInput | $Enums.ProviderType | null
   imageProvider?: Prisma.NullableEnumProviderTypeFieldUpdateOperationsInput | $Enums.ProviderType | null
+  flowNodeId?: Prisma.NullableStringFieldUpdateOperationsInput | string | null
+  keepOutput?: Prisma.BoolFieldUpdateOperationsInput | boolean
   status?: Prisma.EnumGenerationStatusFieldUpdateOperationsInput | $Enums.GenerationStatus
   progressStage?: Prisma.NullableStringFieldUpdateOperationsInput | string | null
   progressMessage?: Prisma.NullableStringFieldUpdateOperationsInput | string | null
@@ -1721,6 +1805,8 @@ export type GenerationRunUncheckedUpdateManyWithoutImageSessionInput = {
   promptRevision?: Prisma.IntFieldUpdateOperationsInput | number
   promptProvider?: Prisma.NullableEnumProviderTypeFieldUpdateOperationsInput | $Enums.ProviderType | null
   imageProvider?: Prisma.NullableEnumProviderTypeFieldUpdateOperationsInput | $Enums.ProviderType | null
+  flowNodeId?: Prisma.NullableStringFieldUpdateOperationsInput | string | null
+  keepOutput?: Prisma.BoolFieldUpdateOperationsInput | boolean
   status?: Prisma.EnumGenerationStatusFieldUpdateOperationsInput | $Enums.GenerationStatus
   progressStage?: Prisma.NullableStringFieldUpdateOperationsInput | string | null
   progressMessage?: Prisma.NullableStringFieldUpdateOperationsInput | string | null
@@ -1747,6 +1833,8 @@ export type GenerationRunCreateManySourceAssetInput = {
   promptRevision?: number
   promptProvider?: $Enums.ProviderType | null
   imageProvider?: $Enums.ProviderType | null
+  flowNodeId?: string | null
+  keepOutput?: boolean
   status?: $Enums.GenerationStatus
   progressStage?: string | null
   progressMessage?: string | null
@@ -1770,6 +1858,8 @@ export type GenerationRunUpdateWithoutSourceAssetInput = {
   promptRevision?: Prisma.IntFieldUpdateOperationsInput | number
   promptProvider?: Prisma.NullableEnumProviderTypeFieldUpdateOperationsInput | $Enums.ProviderType | null
   imageProvider?: Prisma.NullableEnumProviderTypeFieldUpdateOperationsInput | $Enums.ProviderType | null
+  flowNodeId?: Prisma.NullableStringFieldUpdateOperationsInput | string | null
+  keepOutput?: Prisma.BoolFieldUpdateOperationsInput | boolean
   status?: Prisma.EnumGenerationStatusFieldUpdateOperationsInput | $Enums.GenerationStatus
   progressStage?: Prisma.NullableStringFieldUpdateOperationsInput | string | null
   progressMessage?: Prisma.NullableStringFieldUpdateOperationsInput | string | null
@@ -1800,6 +1890,8 @@ export type GenerationRunUncheckedUpdateWithoutSourceAssetInput = {
   promptRevision?: Prisma.IntFieldUpdateOperationsInput | number
   promptProvider?: Prisma.NullableEnumProviderTypeFieldUpdateOperationsInput | $Enums.ProviderType | null
   imageProvider?: Prisma.NullableEnumProviderTypeFieldUpdateOperationsInput | $Enums.ProviderType | null
+  flowNodeId?: Prisma.NullableStringFieldUpdateOperationsInput | string | null
+  keepOutput?: Prisma.BoolFieldUpdateOperationsInput | boolean
   status?: Prisma.EnumGenerationStatusFieldUpdateOperationsInput | $Enums.GenerationStatus
   progressStage?: Prisma.NullableStringFieldUpdateOperationsInput | string | null
   progressMessage?: Prisma.NullableStringFieldUpdateOperationsInput | string | null
@@ -1827,6 +1919,8 @@ export type GenerationRunUncheckedUpdateManyWithoutSourceAssetInput = {
   promptRevision?: Prisma.IntFieldUpdateOperationsInput | number
   promptProvider?: Prisma.NullableEnumProviderTypeFieldUpdateOperationsInput | $Enums.ProviderType | null
   imageProvider?: Prisma.NullableEnumProviderTypeFieldUpdateOperationsInput | $Enums.ProviderType | null
+  flowNodeId?: Prisma.NullableStringFieldUpdateOperationsInput | string | null
+  keepOutput?: Prisma.BoolFieldUpdateOperationsInput | boolean
   status?: Prisma.EnumGenerationStatusFieldUpdateOperationsInput | $Enums.GenerationStatus
   progressStage?: Prisma.NullableStringFieldUpdateOperationsInput | string | null
   progressMessage?: Prisma.NullableStringFieldUpdateOperationsInput | string | null
@@ -1885,6 +1979,8 @@ export type GenerationRunSelect<ExtArgs extends runtime.Types.Extensions.Interna
   promptRevision?: boolean
   promptProvider?: boolean
   imageProvider?: boolean
+  flowNodeId?: boolean
+  keepOutput?: boolean
   status?: boolean
   progressStage?: boolean
   progressMessage?: boolean
@@ -1918,6 +2014,8 @@ export type GenerationRunSelectCreateManyAndReturn<ExtArgs extends runtime.Types
   promptRevision?: boolean
   promptProvider?: boolean
   imageProvider?: boolean
+  flowNodeId?: boolean
+  keepOutput?: boolean
   status?: boolean
   progressStage?: boolean
   progressMessage?: boolean
@@ -1949,6 +2047,8 @@ export type GenerationRunSelectUpdateManyAndReturn<ExtArgs extends runtime.Types
   promptRevision?: boolean
   promptProvider?: boolean
   imageProvider?: boolean
+  flowNodeId?: boolean
+  keepOutput?: boolean
   status?: boolean
   progressStage?: boolean
   progressMessage?: boolean
@@ -1980,6 +2080,8 @@ export type GenerationRunSelectScalar = {
   promptRevision?: boolean
   promptProvider?: boolean
   imageProvider?: boolean
+  flowNodeId?: boolean
+  keepOutput?: boolean
   status?: boolean
   progressStage?: boolean
   progressMessage?: boolean
@@ -1994,7 +2096,7 @@ export type GenerationRunSelectScalar = {
   updatedAt?: boolean
 }
 
-export type GenerationRunOmit<ExtArgs extends runtime.Types.Extensions.InternalArgs = runtime.Types.Extensions.DefaultArgs> = runtime.Types.Extensions.GetOmit<"id" | "projectId" | "imageSessionId" | "sourceAssetId" | "outputAssetId" | "userInstruction" | "refinedPrompt" | "preserveMode" | "preserveEverythingElse" | "promptRevision" | "promptProvider" | "imageProvider" | "status" | "progressStage" | "progressMessage" | "errorMessage" | "attemptCount" | "lastAttemptAt" | "cancelRequestedAt" | "canceledAt" | "startedAt" | "completedAt" | "createdAt" | "updatedAt", ExtArgs["result"]["generationRun"]>
+export type GenerationRunOmit<ExtArgs extends runtime.Types.Extensions.InternalArgs = runtime.Types.Extensions.DefaultArgs> = runtime.Types.Extensions.GetOmit<"id" | "projectId" | "imageSessionId" | "sourceAssetId" | "outputAssetId" | "userInstruction" | "refinedPrompt" | "preserveMode" | "preserveEverythingElse" | "promptRevision" | "promptProvider" | "imageProvider" | "flowNodeId" | "keepOutput" | "status" | "progressStage" | "progressMessage" | "errorMessage" | "attemptCount" | "lastAttemptAt" | "cancelRequestedAt" | "canceledAt" | "startedAt" | "completedAt" | "createdAt" | "updatedAt", ExtArgs["result"]["generationRun"]>
 export type GenerationRunInclude<ExtArgs extends runtime.Types.Extensions.InternalArgs = runtime.Types.Extensions.DefaultArgs> = {
   project?: boolean | Prisma.ProjectDefaultArgs<ExtArgs>
   imageSession?: boolean | Prisma.ImageSessionDefaultArgs<ExtArgs>
@@ -2038,6 +2140,8 @@ export type $GenerationRunPayload<ExtArgs extends runtime.Types.Extensions.Inter
     promptRevision: number
     promptProvider: $Enums.ProviderType | null
     imageProvider: $Enums.ProviderType | null
+    flowNodeId: string | null
+    keepOutput: boolean
     status: $Enums.GenerationStatus
     progressStage: string | null
     progressMessage: string | null
@@ -2490,6 +2594,8 @@ export interface GenerationRunFieldRefs {
   readonly promptRevision: Prisma.FieldRef<"GenerationRun", 'Int'>
   readonly promptProvider: Prisma.FieldRef<"GenerationRun", 'ProviderType'>
   readonly imageProvider: Prisma.FieldRef<"GenerationRun", 'ProviderType'>
+  readonly flowNodeId: Prisma.FieldRef<"GenerationRun", 'String'>
+  readonly keepOutput: Prisma.FieldRef<"GenerationRun", 'Boolean'>
   readonly status: Prisma.FieldRef<"GenerationRun", 'GenerationStatus'>
   readonly progressStage: Prisma.FieldRef<"GenerationRun", 'String'>
   readonly progressMessage: Prisma.FieldRef<"GenerationRun", 'String'>
