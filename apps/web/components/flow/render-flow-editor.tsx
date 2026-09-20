@@ -272,8 +272,8 @@ type WorkflowTransferPayload = {
 const ACTIVE_STATUSES = new Set(["PENDING", "PROMPTING", "PROMPT_READY", "GENERATING", "DOWNLOADING"]);
 const WORLD_WIDTH = 5200;
 const WORLD_HEIGHT = 3600;
-const MIN_ZOOM = 0.38;
-const MAX_ZOOM = 1.55;
+const MIN_ZOOM = 0.005;
+const MAX_ZOOM = 4.0;
 
 const TEXT_SIZE = { width: 430, height: 270 };
 const ASSISTANT_SIZE = { width: 380, height: 365 };
@@ -284,6 +284,7 @@ const AUTO_LAYOUT_COLUMN_GAP = 120;
 const IMAGE_SIZE = { width: 245, height: 205 };
 const WORKFLOW_CLIPBOARD_KEY = "eskander-flow-workflow-clipboard";
 const NODE_CLIPBOARD_KEY = "eskander-flow-node-clipboard-v1";
+const NODE_CLIPBOARD_TEXT_PREFIX = "__ESKANDER_FLOW_NODE_CLIPBOARD_V1__";
 const WORKFLOW_FILE_KIND = "eskander-flow-workflow";
 const WORKFLOW_FILE_VERSION = 2;
 const INTERNAL_NODE_DRAG_MIME = "application/x-eskander-node-id";
@@ -357,6 +358,121 @@ function isSupportedImageFile(file: File) {
 
 function isImageTransferItem(item: DataTransferItem) {
   return item.kind === "file" && (item.type.startsWith("image/") || item.type === "");
+}
+
+function encodeNodeClipboardPayload(nodes: CanvasNode[]) {
+  return `${NODE_CLIPBOARD_TEXT_PREFIX}${JSON.stringify(nodes)}`;
+}
+
+function decodeNodeClipboardPayload(raw: string | null | undefined) {
+  if (!raw?.startsWith(NODE_CLIPBOARD_TEXT_PREFIX)) return null;
+
+  try {
+    const payload = JSON.parse(raw.slice(NODE_CLIPBOARD_TEXT_PREFIX.length)) as CanvasNode[];
+    return Array.isArray(payload) && payload.length > 0 ? payload : null;
+  } catch {
+    return null;
+  }
+}
+
+function makeClipboardSafeNode(node: CanvasNode): CanvasNode {
+  if (node.kind === "TEXT") {
+    const data = node.data as TextNodeData;
+    return { ...node, data: { ...data, generationId: undefined } };
+  }
+
+  if (node.kind === "ASSISTANT") {
+    const data = node.data as AssistantNodeData;
+    return {
+      ...node,
+      data: {
+        ...data,
+        generationId: undefined,
+        state: data.outputText ? "READY" : "IDLE",
+        errorMessage: null,
+      },
+    };
+  }
+
+  if (node.kind === "IMAGE_GENERATOR") {
+    const data = node.data as GeneratorNodeData;
+    return {
+      ...node,
+      data: {
+        ...data,
+        generationId: undefined,
+        keepOutput: false,
+        status: "IDLE",
+        progressMessage: null,
+        errorMessage: null,
+        outputAsset: null,
+      },
+    };
+  }
+
+  const data = node.data as ImageNodeData;
+  return {
+    ...node,
+    data: {
+      ...data,
+      localFile: undefined,
+    },
+  };
+}
+
+function makeRemappedClipboardNodes(sourceNodes: CanvasNode[], offsetX: number, offsetY: number) {
+  const copiedIds = new Set(sourceNodes.map((node) => node.id));
+  const idMap = new Map<string, string>();
+  sourceNodes.forEach((node) => idMap.set(node.id, `draft-${node.kind.toLowerCase()}-${crypto.randomUUID()}`));
+  const remap = (id: string | null | undefined) => (id && copiedIds.has(id) ? idMap.get(id) ?? null : null);
+
+  const remapped = sourceNodes.map((source): CanvasNode => {
+    const node = makeClipboardSafeNode(source);
+    const id = idMap.get(source.id)!;
+    let data = node.data;
+
+    if (node.kind === "ASSISTANT") {
+      const current = data as AssistantNodeData;
+      data = { ...current, textNodeId: remap(current.textNodeId) };
+    } else if (node.kind === "IMAGE_GENERATOR") {
+      const current = data as GeneratorNodeData;
+      data = {
+        ...current,
+        promptNodeId: remap(current.promptNodeId),
+        sourceNodeId: remap(current.sourceNodeId),
+        referenceNodeIds: current.referenceNodeIds
+          .map((refId) => remap(refId))
+          .filter((refId): refId is string => Boolean(refId)),
+      };
+    }
+
+    return {
+      ...node,
+      id,
+      x: node.x + offsetX,
+      y: node.y + offsetY,
+      data,
+    };
+  });
+
+  // Keep multi-node copies in the exact same relative layout. Clamp only the
+  // whole group, never each node independently; otherwise nodes near the world
+  // edge can collapse on top of each other during Alt-drag or paste.
+  const bounds = computeNodeBounds(remapped);
+  let groupOffsetX = 0;
+  let groupOffsetY = 0;
+
+  if (bounds.left < 24) groupOffsetX = 24 - bounds.left;
+  else if (bounds.right > WORLD_WIDTH - 24) groupOffsetX = WORLD_WIDTH - 24 - bounds.right;
+
+  if (bounds.top < 24) groupOffsetY = 24 - bounds.top;
+  else if (bounds.bottom > WORLD_HEIGHT - 24) groupOffsetY = WORLD_HEIGHT - 24 - bounds.bottom;
+
+  return remapped.map((node) => ({
+    ...node,
+    x: node.x + groupOffsetX,
+    y: node.y + groupOffsetY,
+  }));
 }
 
 function makeImageNode(input: {
@@ -838,6 +954,7 @@ export function RenderFlowEditor({ projectId, sessionId }: RenderFlowEditorProps
   const referenceDropPointRef = useRef({ x: 360, y: 720 });
   const referenceTargetGeneratorRef = useRef<string | null>(null);
   const clipboardPastePointRef = useRef<{ x: number; y: number } | null>(null);
+  const nodeClipboardFreshRef = useRef(false);
   const undoStackRef = useRef<FlowHistorySnapshot[]>([]);
   const redoStackRef = useRef<FlowHistorySnapshot[]>([]);
   const currentHistorySnapshotRef = useRef<FlowHistorySnapshot | null>(null);
@@ -917,6 +1034,20 @@ export function RenderFlowEditor({ projectId, sessionId }: RenderFlowEditorProps
       height: bottom - top,
     };
   }, [nodeById, selectedNodeIds]);
+
+  function isInsideSelectedDragSurface(world: { x: number; y: number }) {
+    if (!selectedGroupBounds) return false;
+
+    // The visible selected group has a small title/handle area above nodes.
+    // Include that area so Alt+drag starts from Text/Assistant headers and
+    // editors without forcing the duplicated card to jump away from the cursor.
+    return (
+      world.x >= selectedGroupBounds.left - 12 &&
+      world.x <= selectedGroupBounds.right + 12 &&
+      world.y >= selectedGroupBounds.top - 46 &&
+      world.y <= selectedGroupBounds.bottom + 12
+    );
+  }
 
   const generationById = useMemo(
     () => new Map((flowData?.generations ?? []).map((generation) => [generation.id, generation])),
@@ -1492,16 +1623,33 @@ export function RenderFlowEditor({ projectId, sessionId }: RenderFlowEditorProps
         .map((item) => item.getAsFile())
         .filter((file): file is File => Boolean(file));
 
-      if (files.length === 0) return;
-
-      event.preventDefault();
-      const point = clipboardPastePointRef.current ?? screenToWorld(window.innerWidth / 2, window.innerHeight / 2);
-      try {
-        await createImageNodesFromFiles(files, point.x, point.y);
-        setToast(files.length === 1 ? "Image pasted" : `${files.length} images pasted`);
-      } catch (pasteError) {
-        setError(pasteError instanceof Error ? pasteError.message : "Could not paste the image.");
+      // Real clipboard images always win. This prevents an older Eskander canvas
+      // copy from being pasted after the user copies an image from Photoshop,
+      // Snipping Tool, Explorer, or any external app.
+      if (files.length > 0) {
+        event.preventDefault();
+        const point = clipboardPastePointRef.current ?? screenToWorld(window.innerWidth / 2, window.innerHeight / 2);
+        try {
+          await createImageNodesFromFiles(files, point.x, point.y);
+          nodeClipboardFreshRef.current = false;
+          setToast(files.length === 1 ? "Image pasted" : `${files.length} images pasted`);
+        } catch (pasteError) {
+          setError(pasteError instanceof Error ? pasteError.message : "Could not paste the image.");
+        }
+        return;
       }
+
+      const nodePayload = decodeNodeClipboardPayload(event.clipboardData?.getData("text/plain"));
+      if (nodePayload) {
+        event.preventDefault();
+        pasteNodesFromPayload(nodePayload);
+        return;
+      }
+
+      // Do not use localStorage fallback when the browser provides clipboard
+      // content but it is not an Eskander payload. That content is newer than the
+      // last internal canvas copy, so pasting the old node would be stale.
+      nodeClipboardFreshRef.current = false;
     }
 
     window.addEventListener("paste", handlePaste);
@@ -1695,48 +1843,19 @@ export function RenderFlowEditor({ projectId, sessionId }: RenderFlowEditorProps
   }
 
   function makeClipboardNode(node: CanvasNode): CanvasNode {
-    if (node.kind === "TEXT") {
-      const data = node.data as TextNodeData;
-      return { ...node, data: { ...data, generationId: undefined } };
-    }
+    return makeClipboardSafeNode(node);
+  }
 
-    if (node.kind === "ASSISTANT") {
-      const data = node.data as AssistantNodeData;
-      return {
-        ...node,
-        data: {
-          ...data,
-          generationId: undefined,
-          state: data.outputText ? "READY" : "IDLE",
-          errorMessage: null,
-        },
-      };
-    }
+  function readLocalNodeClipboardPayload() {
+    const raw = window.localStorage.getItem(NODE_CLIPBOARD_KEY);
+    if (!raw) return null;
 
-    if (node.kind === "IMAGE_GENERATOR") {
-      const data = node.data as GeneratorNodeData;
-      return {
-        ...node,
-        data: {
-          ...data,
-          generationId: undefined,
-          keepOutput: false,
-          status: "IDLE",
-          progressMessage: null,
-          errorMessage: null,
-          outputAsset: null,
-        },
-      };
+    try {
+      const payload = JSON.parse(raw) as CanvasNode[];
+      return Array.isArray(payload) && payload.length > 0 ? payload : null;
+    } catch {
+      return null;
     }
-
-    const data = node.data as ImageNodeData;
-    return {
-      ...node,
-      data: {
-        ...data,
-        localFile: undefined,
-      },
-    };
   }
 
   async function copySelectedNodesToClipboard() {
@@ -1749,12 +1868,45 @@ export function RenderFlowEditor({ projectId, sessionId }: RenderFlowEditorProps
 
     try {
       const payload = selected.map(makeClipboardNode);
+      const encoded = encodeNodeClipboardPayload(payload);
       window.localStorage.setItem(NODE_CLIPBOARD_KEY, JSON.stringify(payload));
+      nodeClipboardFreshRef.current = true;
+
+      try {
+        await navigator.clipboard?.writeText(encoded);
+      } catch (systemClipboardError) {
+        console.warn("Could not write Eskander nodes to the system clipboard:", systemClipboardError);
+      }
+
       setToast(selected.length === 1 ? "Element copied" : `${selected.length} elements copied`);
     } catch (copyError) {
       setError(copyError instanceof Error ? copyError.message : "Could not copy the selected elements.");
     }
   }
+
+  useEffect(() => {
+    function clearNodeClipboardFreshness(event?: ClipboardEvent) {
+      if (!event) {
+        nodeClipboardFreshRef.current = false;
+        return;
+      }
+
+      const target = event.target as HTMLElement | null;
+      const tagName = target?.tagName;
+      const isEditing = tagName === "TEXTAREA" || tagName === "INPUT" || tagName === "SELECT" || Boolean(target?.isContentEditable);
+      const selectedText = window.getSelection()?.toString().trim();
+      if (isEditing || selectedText) nodeClipboardFreshRef.current = false;
+    }
+
+    window.addEventListener("copy", clearNodeClipboardFreshness);
+    window.addEventListener("cut", clearNodeClipboardFreshness);
+    window.addEventListener("blur", clearNodeClipboardFreshness);
+    return () => {
+      window.removeEventListener("copy", clearNodeClipboardFreshness);
+      window.removeEventListener("cut", clearNodeClipboardFreshness);
+      window.removeEventListener("blur", clearNodeClipboardFreshness);
+    };
+  }, []);
 
   async function pasteImageFilesFromSystemClipboard() {
     if (!navigator.clipboard?.read) return false;
@@ -1775,6 +1927,7 @@ export function RenderFlowEditor({ projectId, sessionId }: RenderFlowEditorProps
 
       const pastePoint = clipboardPastePointRef.current ?? screenToWorld(window.innerWidth / 2, window.innerHeight / 2);
       await createImageNodesFromFiles(files, pastePoint.x, pastePoint.y);
+      nodeClipboardFreshRef.current = false;
       setToast(files.length === 1 ? "Image pasted" : `${files.length} images pasted`);
       return true;
     } catch (clipboardError) {
@@ -1783,67 +1936,71 @@ export function RenderFlowEditor({ projectId, sessionId }: RenderFlowEditorProps
     }
   }
 
+  function pasteNodesFromPayload(sourceNodes: CanvasNode[]) {
+    if (!Array.isArray(sourceNodes) || sourceNodes.length === 0) throw new Error("The copied elements are invalid.");
+
+    const bounds = computeNodeBounds(sourceNodes);
+    const pastePoint = clipboardPastePointRef.current;
+    const offsetX = pastePoint
+      ? pastePoint.x - bounds.left
+      : Math.min(120, Math.max(42, bounds.width * 0.08));
+    const offsetY = pastePoint
+      ? pastePoint.y - bounds.top
+      : Math.min(120, Math.max(42, bounds.height * 0.08));
+
+    const pasted = makeRemappedClipboardNodes(sourceNodes, offsetX, offsetY);
+    setNodes((current) => [...current, ...pasted]);
+    setSelectedNodeIds(pasted.map((node) => node.id));
+    setToast(pasted.length === 1 ? "Element pasted" : `${pasted.length} elements pasted`);
+  }
+
+  async function pasteNodesFromSystemClipboard(): Promise<"pasted" | "not-node" | "unavailable"> {
+    if (!navigator.clipboard?.readText) return "unavailable";
+
+    try {
+      const rawText = await navigator.clipboard.readText();
+      const nodePayload = decodeNodeClipboardPayload(rawText);
+      if (!nodePayload) return "not-node";
+      pasteNodesFromPayload(nodePayload);
+      return "pasted";
+    } catch (clipboardError) {
+      console.warn("Could not read Eskander nodes from the system clipboard:", clipboardError);
+      return "unavailable";
+    }
+  }
+
   async function pasteFromKeyboardShortcut() {
-    const pastedImage = await pasteImageFilesFromSystemClipboard();
-    if (pastedImage) return;
-    await pasteSelectedNodesFromClipboard();
+    // External images have priority over any previous internal node copy.
+    // This keeps Ctrl+V in sync with what the user copied most recently.
+    if (await pasteImageFilesFromSystemClipboard()) return;
+
+    const nodePasteStatus = await pasteNodesFromSystemClipboard();
+    if (nodePasteStatus === "pasted") return;
+
+    // Use the local fallback only when the OS clipboard cannot be read at all.
+    // If the OS clipboard is readable and it has normal text or an external
+    // image/HTML payload, the old local node copy is stale and must not paste.
+    if (nodePasteStatus === "unavailable" && nodeClipboardFreshRef.current) {
+      const localPayload = readLocalNodeClipboardPayload();
+      if (localPayload) {
+        pasteNodesFromPayload(localPayload);
+        return;
+      }
+    }
+
+    nodeClipboardFreshRef.current = false;
+    setToast("Clipboard has no Eskander element or image.");
   }
 
   async function pasteSelectedNodesFromClipboard() {
-    const raw = window.localStorage.getItem(NODE_CLIPBOARD_KEY);
-    if (!raw) {
+    const sourceNodes = readLocalNodeClipboardPayload();
+    if (!sourceNodes) {
       setToast("Nothing copied yet.");
       return;
     }
 
     try {
-      const sourceNodes = JSON.parse(raw) as CanvasNode[];
-      if (!Array.isArray(sourceNodes) || sourceNodes.length === 0) throw new Error("The copied elements are invalid.");
-
-      const copiedIds = new Set(sourceNodes.map((node) => node.id));
-      const idMap = new Map<string, string>();
-      sourceNodes.forEach((node) => idMap.set(node.id, `draft-${node.kind.toLowerCase()}-${crypto.randomUUID()}`));
-      const remap = (id: string | null | undefined) => (id && copiedIds.has(id) ? idMap.get(id) ?? null : null);
-
-      const bounds = computeNodeBounds(sourceNodes);
-      const pastePoint = clipboardPastePointRef.current;
-      const offsetX = pastePoint
-        ? pastePoint.x - bounds.left
-        : Math.min(120, Math.max(42, bounds.width * 0.08));
-      const offsetY = pastePoint
-        ? pastePoint.y - bounds.top
-        : Math.min(120, Math.max(42, bounds.height * 0.08));
-
-      const pasted = sourceNodes.map((source): CanvasNode => {
-        const node = makeClipboardNode(source);
-        const id = idMap.get(source.id)!;
-        let data = node.data;
-
-        if (node.kind === "ASSISTANT") {
-          const current = data as AssistantNodeData;
-          data = { ...current, textNodeId: remap(current.textNodeId) };
-        } else if (node.kind === "IMAGE_GENERATOR") {
-          const current = data as GeneratorNodeData;
-          data = {
-            ...current,
-            promptNodeId: remap(current.promptNodeId),
-            sourceNodeId: remap(current.sourceNodeId),
-            referenceNodeIds: current.referenceNodeIds.map((refId) => remap(refId)).filter((refId): refId is string => Boolean(refId)),
-          };
-        }
-
-        return {
-          ...node,
-          id,
-          x: clamp(node.x + offsetX, 24, WORLD_WIDTH - node.width - 24),
-          y: clamp(node.y + offsetY, 24, WORLD_HEIGHT - node.height - 24),
-          data,
-        };
-      });
-
-      setNodes((current) => [...current, ...pasted]);
-      setSelectedNodeIds(pasted.map((node) => node.id));
-      setToast(pasted.length === 1 ? "Element pasted" : `${pasted.length} elements pasted`);
+      pasteNodesFromPayload(sourceNodes);
     } catch (pasteError) {
       setError(pasteError instanceof Error ? pasteError.message : "Could not paste the copied elements.");
     }
@@ -2372,6 +2529,34 @@ export function RenderFlowEditor({ projectId, sessionId }: RenderFlowEditorProps
     }
   }
 
+  function beginAltDuplicateSelectionDrag(event: ReactPointerEvent | PointerEvent) {
+    if (!event.altKey || event.button !== 0 || tool === "PAN" || spaceHeld || pendingConnection) return false;
+    if (!selectedGroupBounds || selectedNodeIds.length === 0) return false;
+
+    const world = screenToWorld(event.clientX, event.clientY);
+    if (!isInsideSelectedDragSurface(world)) {
+      return false;
+    }
+
+    event.preventDefault();
+    event.stopPropagation();
+
+    const sourceNodes = nodesRef.current.filter((candidate) => selectedNodeIds.includes(candidate.id));
+    const duplicated = makeRemappedClipboardNodes(sourceNodes, 0, 0);
+    const duplicatedIds = duplicated.map((candidate) => candidate.id);
+
+    setAddMenu(null);
+    setNodes((current) => [...current, ...duplicated]);
+    setSelectedNodeIds(duplicatedIds);
+    setNodeDrag({
+      nodeIds: duplicatedIds,
+      startClientX: event.clientX,
+      startClientY: event.clientY,
+      startPositions: Object.fromEntries(duplicated.map((candidate) => [candidate.id, { x: candidate.x, y: candidate.y }])),
+    });
+    return true;
+  }
+
   function screenToWorld(clientX: number, clientY: number) {
     const rect = viewportRef.current?.getBoundingClientRect();
     const left = rect?.left ?? 0;
@@ -2385,6 +2570,7 @@ export function RenderFlowEditor({ projectId, sessionId }: RenderFlowEditorProps
   function startNodeDrag(event: ReactPointerEvent, node: CanvasNode) {
     if (pendingConnection) return;
     if (event.button !== 0 || tool === "PAN" || spaceHeld) return;
+    if (event.altKey && beginAltDuplicateSelectionDrag(event)) return;
     const target = event.target as HTMLElement;
     if (target.closest("button, textarea, input, select, [data-native-image-drag]")) return;
 
@@ -2408,6 +2594,7 @@ export function RenderFlowEditor({ projectId, sessionId }: RenderFlowEditorProps
     if (dragIds.length === 0) return;
 
     setAddMenu(null);
+
     setNodeDrag({
       nodeIds: dragIds,
       startClientX: event.clientX,
@@ -2456,11 +2643,9 @@ export function RenderFlowEditor({ projectId, sessionId }: RenderFlowEditorProps
     if (
       !event.shiftKey &&
       selectedGroupBounds &&
-      world.x >= selectedGroupBounds.left &&
-      world.x <= selectedGroupBounds.right &&
-      world.y >= selectedGroupBounds.top &&
-      world.y <= selectedGroupBounds.bottom
+      isInsideSelectedDragSurface(world)
     ) {
+      if (event.altKey && beginAltDuplicateSelectionDrag(event)) return;
       event.preventDefault();
       setNodeDrag({
         nodeIds: [...selectedNodeIds],
@@ -3782,11 +3967,16 @@ export function RenderFlowEditor({ projectId, sessionId }: RenderFlowEditorProps
             }
           }}
           onPointerDown={(event) => {
+            if (event.altKey && beginAltDuplicateSelectionDrag(event)) return;
             event.stopPropagation();
             if (!selectedNodeIds.includes(node.id)) setSelectedNodeIds([node.id]);
           }}
           onClick={(event) => event.stopPropagation()}
           onDragStart={(event) => {
+            if (event.altKey) {
+              event.preventDefault();
+              return;
+            }
             const text = data.text.trim();
             if (!text) {
               event.preventDefault();
@@ -3859,10 +4049,15 @@ export function RenderFlowEditor({ projectId, sessionId }: RenderFlowEditorProps
                 }))
               }
               onPointerDown={(event) => {
+                if (event.altKey && beginAltDuplicateSelectionDrag(event)) return;
                 event.stopPropagation();
                 if (!selectedNodeIds.includes(node.id)) setSelectedNodeIds([node.id]);
               }}
               onDragStart={(event) => {
+                if (event.altKey) {
+                  event.preventDefault();
+                  return;
+                }
                 const prompt = data.outputText.trim();
                 if (!prompt) {
                   event.preventDefault();
@@ -3930,6 +4125,7 @@ export function RenderFlowEditor({ projectId, sessionId }: RenderFlowEditorProps
               onClick={async (event) => {
                 event.stopPropagation();
                 if (!data.outputText.trim()) return;
+                nodeClipboardFreshRef.current = false;
                 await navigator.clipboard.writeText(data.outputText);
                 setToast("Prompt copied");
               }}
@@ -4021,6 +4217,7 @@ export function RenderFlowEditor({ projectId, sessionId }: RenderFlowEditorProps
         throw new Error("Eskander Studio desktop bridge is not available.");
       }
 
+      nodeClipboardFreshRef.current = false;
       await window.eskanderStudio.copyImage(getAssetUrl(asset.filePath));
       setToast("Copied to clipboard");
     } catch (error) {
@@ -4061,9 +4258,13 @@ export function RenderFlowEditor({ projectId, sessionId }: RenderFlowEditorProps
   }
 
   function startGeneratorImageDrag(event: ReactDragEvent<HTMLImageElement>, asset: Asset) {
-    // Electron's native file drag replaces Chromium's normal image drag.
+    // Always use Electron's native file drag for generated images. Browser image
+    // dragging can hand Photoshop a rendered preview instead of the original
+    // generated file, which reduces quality.
     event.preventDefault();
     event.stopPropagation();
+    event.dataTransfer.clearData();
+    event.dataTransfer.effectAllowed = "copy";
 
     if (!window.eskanderStudio?.desktop) {
       setError("Eskander Studio desktop bridge is not available.");
@@ -4073,7 +4274,7 @@ export function RenderFlowEditor({ projectId, sessionId }: RenderFlowEditorProps
     const prepared = preparedImageDragsRef.current.get(asset.id);
     if (!prepared) {
       void prepareGeneratorImageDrag(asset);
-      setToast("Preparing image for drag — grab it again in a moment");
+      setToast("Preparing original image for drag — grab it again in a moment");
       return;
     }
 
@@ -4644,6 +4845,9 @@ export function RenderFlowEditor({ projectId, sessionId }: RenderFlowEditorProps
           backgroundImage: "radial-gradient(circle, rgba(255,255,255,.075) 1px, transparent 1.2px)",
           backgroundSize: `${22 * camera.zoom}px ${22 * camera.zoom}px`,
           backgroundPosition: `${camera.x}px ${camera.y}px`,
+        }}
+        onPointerDownCapture={(event) => {
+          if (event.altKey) beginAltDuplicateSelectionDrag(event);
         }}
         onPointerDown={handleViewportPointerDown}
         onPointerMove={handleViewportPointerMove}
