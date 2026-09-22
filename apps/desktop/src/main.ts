@@ -298,8 +298,8 @@ async function spawnNodeRuntime(
         runtimeFailureShown = true;
 
         dialog.showErrorBox(
-          "Eskander Plus Studio service stopped",
-          `${prefix} stopped unexpectedly. Restart Eskander Plus Studio.`,
+          "E + AI Suit service stopped",
+          `${prefix} stopped unexpectedly. Restart E + AI Suit.`,
         );
 
         app.quit();
@@ -437,7 +437,7 @@ function createMainWindow(webUrl: string, apiUrl: string) {
     minWidth: 1180,
     minHeight: 720,
     backgroundColor: "#0A0A0A",
-    title: "Eskander Plus Studio",
+    title: "E + AI Suit",
     icon: getAppIconPath(),
     show: false,
     webPreferences: {
@@ -488,10 +488,10 @@ if (!hasSingleInstanceLock) {
         );
       }
     } catch (error) {
-      console.error("Failed to start Eskander Plus Studio:", error);
+      console.error("Failed to start E + AI Suit:", error);
 
       dialog.showErrorBox(
-        "Eskander Plus Studio could not start",
+        "E + AI Suit could not start",
         error instanceof Error ? error.message : "Unknown startup error.",
       );
 

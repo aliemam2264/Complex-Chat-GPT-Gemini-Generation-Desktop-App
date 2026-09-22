@@ -424,7 +424,7 @@ function makeRemappedClipboardNodes(sourceNodes: CanvasNode[], offsetX: number, 
   const copiedIds = new Set(sourceNodes.map((node) => node.id));
   const idMap = new Map<string, string>();
   sourceNodes.forEach((node) => idMap.set(node.id, `draft-${node.kind.toLowerCase()}-${crypto.randomUUID()}`));
-  const remap = (id: string | null | undefined) => (id && copiedIds.has(id) ? idMap.get(id) ?? null : null);
+  const remap = (id: string | null | undefined) => (id && copiedIds.has(id) ? (idMap.get(id) ?? null) : null);
 
   const remapped = sourceNodes.map((source): CanvasNode => {
     const node = makeClipboardSafeNode(source);
@@ -702,14 +702,14 @@ function dedupeFlowImageNodes(nodes: CanvasNode[]) {
   return kept.map((node) => {
     if (node.kind === "ASSISTANT") {
       const data = node.data as AssistantNodeData;
-      const textNodeId = data.textNodeId ? nodeIdRemap.get(data.textNodeId) ?? data.textNodeId : null;
+      const textNodeId = data.textNodeId ? (nodeIdRemap.get(data.textNodeId) ?? data.textNodeId) : null;
       return textNodeId === data.textNodeId ? node : { ...node, data: { ...data, textNodeId } };
     }
 
     if (node.kind !== "IMAGE_GENERATOR") return node;
 
     const data = node.data as GeneratorNodeData;
-    const sourceNodeId = data.sourceNodeId ? nodeIdRemap.get(data.sourceNodeId) ?? data.sourceNodeId : null;
+    const sourceNodeId = data.sourceNodeId ? (nodeIdRemap.get(data.sourceNodeId) ?? data.sourceNodeId) : null;
     const referenceNodeIds = [
       ...new Set(data.referenceNodeIds.map((referenceNodeId) => nodeIdRemap.get(referenceNodeId) ?? referenceNodeId)),
     ].slice(0, 5);
@@ -820,9 +820,7 @@ function getVisibleFlowGenerations(generations: FlowGeneration[]) {
 }
 
 function makeStarterPipelineNodes(data: FlowData): CanvasNode[] {
-  const inputAssets = data.session.assets.filter(
-    (asset) => asset.type === "ORIGINAL" || asset.type === "FLOW_INPUT",
-  );
+  const inputAssets = data.session.assets.filter((asset) => asset.type === "ORIGINAL" || asset.type === "FLOW_INPUT");
   const sourceAsset = inputAssets[0];
   const sourceId = `starter-source-${data.session.id}`;
   const textId = `starter-text-${data.session.id}`;
@@ -909,11 +907,14 @@ function makeStarterPipelineNodes(data: FlowData): CanvasNode[] {
 }
 
 function makeInitialNodes(data: FlowData): CanvasNode[] {
-  const savedState = data.session.flowState as {
-    nodes?: CanvasNode[];
-    hiddenNodeIds?: string[];
-    hiddenGenerationIds?: string[];
-  } | null | undefined;
+  const savedState = data.session.flowState as
+    | {
+        nodes?: CanvasNode[];
+        hiddenNodeIds?: string[];
+        hiddenGenerationIds?: string[];
+      }
+    | null
+    | undefined;
 
   if (savedState && Array.isArray(savedState.nodes)) {
     const hiddenNodeIds = new Set(savedState.hiddenNodeIds ?? []);
@@ -962,9 +963,7 @@ export function RenderFlowEditor({ projectId, sessionId }: RenderFlowEditorProps
   const historyReadyRef = useRef(false);
   const applyingHistoryRef = useRef(false);
   const suppressNextHistoryRef = useRef(false);
-  const preparedImageDragsRef = useRef(
-    new Map<string, { filePath: string; iconPath?: string | null }>(),
-  );
+  const preparedImageDragsRef = useRef(new Map<string, { filePath: string; iconPath?: string | null }>());
   const preparingImageDragsRef = useRef(new Set<string>());
 
   const [nodes, setNodes] = useState<CanvasNode[]>([]);
@@ -1000,10 +999,7 @@ export function RenderFlowEditor({ projectId, sessionId }: RenderFlowEditorProps
   });
 
   const flowData = flowQuery.data;
-  const visibleFlowGenerations = useMemo(
-    () => getVisibleFlowGenerations(flowData?.generations ?? []),
-    [flowData],
-  );
+  const visibleFlowGenerations = useMemo(() => getVisibleFlowGenerations(flowData?.generations ?? []), [flowData]);
   const nodeById = useMemo(() => new Map(nodes.map((node) => [node.id, node])), [nodes]);
 
   useEffect(() => {
@@ -1072,12 +1068,15 @@ export function RenderFlowEditor({ projectId, sessionId }: RenderFlowEditorProps
 
     if (!initializedRef.current) {
       initializedRef.current = true;
-      const persisted = flowData.session.flowState as {
-        camera?: Camera;
-        nodes?: CanvasNode[];
-        hiddenNodeIds?: string[];
-        hiddenGenerationIds?: string[];
-      } | null | undefined;
+      const persisted = flowData.session.flowState as
+        | {
+            camera?: Camera;
+            nodes?: CanvasNode[];
+            hiddenNodeIds?: string[];
+            hiddenGenerationIds?: string[];
+          }
+        | null
+        | undefined;
       if (persisted?.camera) setCamera(persisted.camera);
       setHiddenNodeIds(Array.isArray(persisted?.hiddenNodeIds) ? persisted!.hiddenNodeIds! : []);
       setHiddenGenerationIds(Array.isArray(persisted?.hiddenGenerationIds) ? persisted!.hiddenGenerationIds! : []);
@@ -1118,9 +1117,7 @@ export function RenderFlowEditor({ projectId, sessionId }: RenderFlowEditorProps
       nextHiddenGenerationIds: string[] = hiddenGenerationIds,
       nextHiddenNodeIds: string[] = hiddenNodeIds,
     ) => {
-      const persistedNodes = nextNodes
-        .map(serializeDraftNode)
-        .filter((node): node is CanvasNode => Boolean(node));
+      const persistedNodes = nextNodes.map(serializeDraftNode).filter((node): node is CanvasNode => Boolean(node));
 
       return apiPatch<null>(`/api/projects/${projectId}/image-sessions/${sessionId}/flow`, {
         state: {
@@ -1266,18 +1263,12 @@ export function RenderFlowEditor({ projectId, sessionId }: RenderFlowEditorProps
         if (width > 6 || height > 6) {
           const hits = nodes
             .filter(
-              (node) =>
-                node.x < right &&
-                node.x + node.width > left &&
-                node.y < bottom &&
-                node.y + node.height > top,
+              (node) => node.x < right && node.x + node.width > left && node.y < bottom && node.y + node.height > top,
             )
             .map((node) => node.id);
 
           setSelectedNodeIds(
-            selectionDrag.additive
-              ? [...new Set([...selectionDrag.initialSelection, ...hits])]
-              : hits,
+            selectionDrag.additive ? [...new Set([...selectionDrag.initialSelection, ...hits])] : hits,
           );
         }
       }
@@ -1363,7 +1354,7 @@ export function RenderFlowEditor({ projectId, sessionId }: RenderFlowEditorProps
     undoStackRef.current.length > 0 ||
     Boolean(
       currentHistorySnapshotRef.current &&
-        historySnapshotSignature(liveHistorySnapshot) !== historySnapshotSignature(currentHistorySnapshotRef.current),
+      historySnapshotSignature(liveHistorySnapshot) !== historySnapshotSignature(currentHistorySnapshotRef.current),
     );
   const canRedo = redoStackRef.current.length > 0;
   void historyVersion;
@@ -1372,7 +1363,8 @@ export function RenderFlowEditor({ projectId, sessionId }: RenderFlowEditorProps
     function handleKeyDown(event: KeyboardEvent) {
       const target = event.target as HTMLElement | null;
       const tagName = target?.tagName;
-      const isEditing = tagName === "TEXTAREA" || tagName === "INPUT" || tagName === "SELECT" || Boolean(target?.isContentEditable);
+      const isEditing =
+        tagName === "TEXTAREA" || tagName === "INPUT" || tagName === "SELECT" || Boolean(target?.isContentEditable);
 
       if (event.code === "Space" && !event.repeat && !isEditing) {
         setSpaceHeld(true);
@@ -1517,8 +1509,10 @@ export function RenderFlowEditor({ projectId, sessionId }: RenderFlowEditorProps
         if (!response.ok) continue;
         const blob = await response.blob();
         if (!blob.type.startsWith("image/")) continue;
-        const extension = blob.type === "image/jpeg" ? "jpg" : blob.type.split("/")[1] ?? "png";
-        files.push(new File([blob], `dropped-image-${Date.now()}-${files.length + 1}.${extension}`, { type: blob.type }));
+        const extension = blob.type === "image/jpeg" ? "jpg" : (blob.type.split("/")[1] ?? "png");
+        files.push(
+          new File([blob], `dropped-image-${Date.now()}-${files.length + 1}.${extension}`, { type: blob.type }),
+        );
       }
       if (files.length === 0) return [] as CanvasNode[];
       return createImageNodesFromFiles(files, worldX, worldY);
@@ -1531,7 +1525,12 @@ export function RenderFlowEditor({ projectId, sessionId }: RenderFlowEditorProps
     const urls: string[] = [];
     const uriList = dataTransfer.getData("text/uri-list");
     if (uriList) {
-      urls.push(...uriList.split(/\r?\n/).map((line) => line.trim()).filter((line) => line && !line.startsWith("#")));
+      urls.push(
+        ...uriList
+          .split(/\r?\n/)
+          .map((line) => line.trim())
+          .filter((line) => line && !line.startsWith("#")),
+      );
     }
 
     const html = dataTransfer.getData("text/html");
@@ -1559,7 +1558,12 @@ export function RenderFlowEditor({ projectId, sessionId }: RenderFlowEditorProps
       const existingImageCount = nodesRef.current.filter((node) => node.kind === "IMAGE").length;
       const created = assets.map((asset, index) => {
         const id = `flow-input-${asset.id}`;
-        const position = findFreeNodePosition(worldX + index * 28, worldY + index * 22, IMAGE_SIZE.width, IMAGE_SIZE.height);
+        const position = findFreeNodePosition(
+          worldX + index * 28,
+          worldY + index * 22,
+          IMAGE_SIZE.width,
+          IMAGE_SIZE.height,
+        );
         return makeImageNode({
           id,
           x: position.x,
@@ -1588,9 +1592,12 @@ export function RenderFlowEditor({ projectId, sessionId }: RenderFlowEditorProps
   async function attachImageNodeToGenerator(generatorId: string, imageNodeId: string, preferredInput?: GeneratorInput) {
     const generator = nodeById.get(generatorId);
     if (!generator || generator.kind !== "IMAGE_GENERATOR") return;
-    const input = preferredInput && preferredInput !== "PROMPT"
-      ? preferredInput
-      : ((generator.data as GeneratorNodeData).sourceNodeId ? "REFERENCE" : "SOURCE");
+    const input =
+      preferredInput && preferredInput !== "PROMPT"
+        ? preferredInput
+        : (generator.data as GeneratorNodeData).sourceNodeId
+          ? "REFERENCE"
+          : "SOURCE";
 
     if (input === "SOURCE") {
       updateNode<GeneratorNodeData>(generatorId, (current) => ({ ...current, sourceNodeId: imageNodeId }));
@@ -1614,7 +1621,8 @@ export function RenderFlowEditor({ projectId, sessionId }: RenderFlowEditorProps
     async function handlePaste(event: ClipboardEvent) {
       const target = event.target as HTMLElement | null;
       const tagName = target?.tagName;
-      const isEditing = tagName === "TEXTAREA" || tagName === "INPUT" || tagName === "SELECT" || Boolean(target?.isContentEditable);
+      const isEditing =
+        tagName === "TEXTAREA" || tagName === "INPUT" || tagName === "SELECT" || Boolean(target?.isContentEditable);
       if (isEditing) return;
 
       const items = Array.from(event.clipboardData?.items ?? []);
@@ -1885,7 +1893,7 @@ export function RenderFlowEditor({ projectId, sessionId }: RenderFlowEditorProps
   }
 
   useEffect(() => {
-    function clearNodeClipboardFreshness(event?: ClipboardEvent) {
+    function clearNodeClipboardFreshness(event?: Event) {
       if (!event) {
         nodeClipboardFreshRef.current = false;
         return;
@@ -1893,7 +1901,8 @@ export function RenderFlowEditor({ projectId, sessionId }: RenderFlowEditorProps
 
       const target = event.target as HTMLElement | null;
       const tagName = target?.tagName;
-      const isEditing = tagName === "TEXTAREA" || tagName === "INPUT" || tagName === "SELECT" || Boolean(target?.isContentEditable);
+      const isEditing =
+        tagName === "TEXTAREA" || tagName === "INPUT" || tagName === "SELECT" || Boolean(target?.isContentEditable);
       const selectedText = window.getSelection()?.toString().trim();
       if (isEditing || selectedText) nodeClipboardFreshRef.current = false;
     }
@@ -1919,8 +1928,10 @@ export function RenderFlowEditor({ projectId, sessionId }: RenderFlowEditorProps
         const imageType = item.types.find((type) => ["image/png", "image/jpeg", "image/webp"].includes(type));
         if (!imageType) continue;
         const blob = await item.getType(imageType);
-        const extension = imageType === "image/jpeg" ? "jpg" : imageType.split("/")[1] ?? "png";
-        files.push(new File([blob], `clipboard-image-${Date.now()}-${files.length + 1}.${extension}`, { type: imageType }));
+        const extension = imageType === "image/jpeg" ? "jpg" : (imageType.split("/")[1] ?? "png");
+        files.push(
+          new File([blob], `clipboard-image-${Date.now()}-${files.length + 1}.${extension}`, { type: imageType }),
+        );
       }
 
       if (files.length === 0) return false;
@@ -1941,12 +1952,8 @@ export function RenderFlowEditor({ projectId, sessionId }: RenderFlowEditorProps
 
     const bounds = computeNodeBounds(sourceNodes);
     const pastePoint = clipboardPastePointRef.current;
-    const offsetX = pastePoint
-      ? pastePoint.x - bounds.left
-      : Math.min(120, Math.max(42, bounds.width * 0.08));
-    const offsetY = pastePoint
-      ? pastePoint.y - bounds.top
-      : Math.min(120, Math.max(42, bounds.height * 0.08));
+    const offsetX = pastePoint ? pastePoint.x - bounds.left : Math.min(120, Math.max(42, bounds.width * 0.08));
+    const offsetY = pastePoint ? pastePoint.y - bounds.top : Math.min(120, Math.max(42, bounds.height * 0.08));
 
     const pasted = makeRemappedClipboardNodes(sourceNodes, offsetX, offsetY);
     setNodes((current) => [...current, ...pasted]);
@@ -2025,7 +2032,11 @@ export function RenderFlowEditor({ projectId, sessionId }: RenderFlowEditorProps
       setError(null);
       setWorkflowBusyLabel("Exporting workflow...");
       const payload = await createWorkflowPayload(getWorkflowNodeIdsFromSelectionOrAll());
-      const fileStem = flowData?.session.name?.trim().replace(/[^a-z0-9-_]+/gi, "-").replace(/^-+|-+$/g, "") || "workflow";
+      const fileStem =
+        flowData?.session.name
+          ?.trim()
+          .replace(/[^a-z0-9-_]+/gi, "-")
+          .replace(/^-+|-+$/g, "") || "workflow";
       const fileName = `${fileStem || "workflow"}-${new Date().toISOString().slice(0, 19).replace(/[:T]/g, "-")}.eskflow.json`;
       const blob = new Blob([JSON.stringify(payload, null, 2)], { type: "application/json" });
       const url = URL.createObjectURL(blob);
@@ -2044,10 +2055,7 @@ export function RenderFlowEditor({ projectId, sessionId }: RenderFlowEditorProps
     }
   }
 
-  function findWorkflowPlacementOffset(
-    transferNodes: WorkflowTransferNode[],
-    mode: "CENTER" | "OFFSET",
-  ) {
+  function findWorkflowPlacementOffset(transferNodes: WorkflowTransferNode[], mode: "CENTER" | "OFFSET") {
     const bounds = computeNodeBounds(
       transferNodes.map((node) => ({ x: node.x, y: node.y, width: node.width, height: node.height })),
     );
@@ -2186,7 +2194,7 @@ export function RenderFlowEditor({ projectId, sessionId }: RenderFlowEditorProps
           height: node.height,
           data: {
             title: node.data.title,
-            textNodeId: node.data.textNodeId ? idMap.get(node.data.textNodeId) ?? null : null,
+            textNodeId: node.data.textNodeId ? (idMap.get(node.data.textNodeId) ?? null) : null,
             outputText: "",
             state: "IDLE",
             errorMessage: null,
@@ -2206,8 +2214,8 @@ export function RenderFlowEditor({ projectId, sessionId }: RenderFlowEditorProps
           height: node.height,
           data: {
             title: node.data.title,
-            promptNodeId: node.data.promptNodeId ? idMap.get(node.data.promptNodeId) ?? null : null,
-            sourceNodeId: node.data.sourceNodeId ? idMap.get(node.data.sourceNodeId) ?? null : null,
+            promptNodeId: node.data.promptNodeId ? (idMap.get(node.data.promptNodeId) ?? null) : null,
+            sourceNodeId: node.data.sourceNodeId ? (idMap.get(node.data.sourceNodeId) ?? null) : null,
             referenceNodeIds: node.data.referenceNodeIds
               .map((referenceNodeId) => idMap.get(referenceNodeId) ?? null)
               .filter((referenceNodeId): referenceNodeId is string => Boolean(referenceNodeId))
@@ -2255,7 +2263,10 @@ export function RenderFlowEditor({ projectId, sessionId }: RenderFlowEditorProps
       setError(null);
       setWorkflowBusyLabel("Pasting workflow...");
       const payload = JSON.parse(raw) as WorkflowTransferPayload;
-      const count = await importWorkflowPayload(payload, payload.originProjectId === projectId && payload.originSessionId === sessionId ? "OFFSET" : "CENTER");
+      const count = await importWorkflowPayload(
+        payload,
+        payload.originProjectId === projectId && payload.originSessionId === sessionId ? "OFFSET" : "CENTER",
+      );
       setToast(count === 1 ? "Workflow pasted." : `Workflow pasted with ${count} nodes.`);
     } catch (pasteError) {
       setError(pasteError instanceof Error ? pasteError.message : "Could not paste the workflow.");
@@ -2297,7 +2308,10 @@ export function RenderFlowEditor({ projectId, sessionId }: RenderFlowEditorProps
       setWorkflowBusyLabel("Replacing image...");
       const formData = new FormData();
       formData.append("image", file);
-      const asset = await apiUpload<Asset>(`/api/projects/${projectId}/image-sessions/${sessionId}/flow/images`, formData);
+      const asset = await apiUpload<Asset>(
+        `/api/projects/${projectId}/image-sessions/${sessionId}/flow/images`,
+        formData,
+      );
 
       setNodes((current) =>
         current.map((node) => {
@@ -2336,7 +2350,6 @@ export function RenderFlowEditor({ projectId, sessionId }: RenderFlowEditorProps
     await replaceImageNodeWithFile(targetNodeId, file);
   }
 
-
   function getWorkflowGeneratorOrder(workflowNodeIds: string[]) {
     const workflowSet = new Set(workflowNodeIds);
     const generators = nodes
@@ -2352,7 +2365,9 @@ export function RenderFlowEditor({ projectId, sessionId }: RenderFlowEditorProps
 
     generators.forEach((generator) => {
       const data = generator.data as GeneratorNodeData;
-      const upstreamIds = [...new Set([data.sourceNodeId, ...data.referenceNodeIds].filter((nodeId): nodeId is string => Boolean(nodeId)))];
+      const upstreamIds = [
+        ...new Set([data.sourceNodeId, ...data.referenceNodeIds].filter((nodeId): nodeId is string => Boolean(nodeId))),
+      ];
       upstreamIds.forEach((nodeId) => {
         if (!workflowSet.has(nodeId)) return;
         const upstreamNode = nodeById.get(nodeId);
@@ -2416,7 +2431,9 @@ export function RenderFlowEditor({ projectId, sessionId }: RenderFlowEditorProps
       }
 
       if (generation.status === "FAILED" || generation.status === "CANCELED") {
-        throw new Error(generation.errorMessage ?? `${(liveNode.data as GeneratorNodeData).title} did not finish successfully.`);
+        throw new Error(
+          generation.errorMessage ?? `${(liveNode.data as GeneratorNodeData).title} did not finish successfully.`,
+        );
       }
 
       await sleep(1500);
@@ -2491,7 +2508,9 @@ export function RenderFlowEditor({ projectId, sessionId }: RenderFlowEditorProps
         throw new Error("This workflow does not contain any Image Generator nodes.");
       }
 
-      setWorkflowBusyLabel(`Running workflow (${generatorOrder.length} step${generatorOrder.length === 1 ? "" : "s"})...`);
+      setWorkflowBusyLabel(
+        `Running workflow (${generatorOrder.length} step${generatorOrder.length === 1 ? "" : "s"})...`,
+      );
 
       for (const generatorNode of generatorOrder) {
         const liveGenerator = nodesRef.current.find((node) => node.id === generatorNode.id);
@@ -2500,15 +2519,18 @@ export function RenderFlowEditor({ projectId, sessionId }: RenderFlowEditorProps
         }
 
         const generatorData = liveGenerator.data as GeneratorNodeData;
-        const promptNode = generatorData.promptNodeId ? nodesRef.current.find((node) => node.id === generatorData.promptNodeId) : null;
+        const promptNode = generatorData.promptNodeId
+          ? nodesRef.current.find((node) => node.id === generatorData.promptNodeId)
+          : null;
 
         if (!promptNode || (promptNode.kind !== "ASSISTANT" && promptNode.kind !== "TEXT")) {
           throw new Error(`${generatorData.title} is missing its prompt node.`);
         }
 
-        const refinedPrompt = promptNode.kind === "ASSISTANT"
-          ? await runAssistantWithContext(promptNode, liveGenerator)
-          : (promptNode.data as TextNodeData).text.trim();
+        const refinedPrompt =
+          promptNode.kind === "ASSISTANT"
+            ? await runAssistantWithContext(promptNode, liveGenerator)
+            : (promptNode.data as TextNodeData).text.trim();
         if (!refinedPrompt) {
           throw new Error(`Could not prepare the prompt for ${generatorData.title}.`);
         }
@@ -2521,7 +2543,9 @@ export function RenderFlowEditor({ projectId, sessionId }: RenderFlowEditorProps
         await waitForGeneratorToFinish(generationId, liveGenerator.id);
       }
 
-      setToast(`Workflow completed. ${generatorOrder.length} generation step${generatorOrder.length === 1 ? "" : "s"} finished.`);
+      setToast(
+        `Workflow completed. ${generatorOrder.length} generation step${generatorOrder.length === 1 ? "" : "s"} finished.`,
+      );
     } catch (workflowError) {
       setError(workflowError instanceof Error ? workflowError.message : "Could not run the workflow.");
     } finally {
@@ -2552,7 +2576,9 @@ export function RenderFlowEditor({ projectId, sessionId }: RenderFlowEditorProps
       nodeIds: duplicatedIds,
       startClientX: event.clientX,
       startClientY: event.clientY,
-      startPositions: Object.fromEntries(duplicated.map((candidate) => [candidate.id, { x: candidate.x, y: candidate.y }])),
+      startPositions: Object.fromEntries(
+        duplicated.map((candidate) => [candidate.id, { x: candidate.x, y: candidate.y }]),
+      ),
     });
     return true;
   }
@@ -2640,11 +2666,7 @@ export function RenderFlowEditor({ projectId, sessionId }: RenderFlowEditorProps
     const world = screenToWorld(event.clientX, event.clientY);
     clipboardPastePointRef.current = world;
 
-    if (
-      !event.shiftKey &&
-      selectedGroupBounds &&
-      isInsideSelectedDragSurface(world)
-    ) {
+    if (!event.shiftKey && selectedGroupBounds && isInsideSelectedDragSurface(world)) {
       if (event.altKey && beginAltDuplicateSelectionDrag(event)) return;
       event.preventDefault();
       setNodeDrag({
@@ -2652,9 +2674,7 @@ export function RenderFlowEditor({ projectId, sessionId }: RenderFlowEditorProps
         startClientX: event.clientX,
         startClientY: event.clientY,
         startPositions: Object.fromEntries(
-          nodes
-            .filter((node) => selectedNodeIds.includes(node.id))
-            .map((node) => [node.id, { x: node.x, y: node.y }]),
+          nodes.filter((node) => selectedNodeIds.includes(node.id)).map((node) => [node.id, { x: node.x, y: node.y }]),
         ),
       });
       return;
@@ -2883,13 +2903,14 @@ export function RenderFlowEditor({ projectId, sessionId }: RenderFlowEditorProps
     let candidateY = Math.max(120, y);
 
     for (let row = 0; row < 40; row += 1) {
-      const blocked = offsets.some((offset) =>
-        !isNodeRectFree({
-          x: candidateX + offset.x,
-          y: candidateY + offset.y,
-          width: offset.width,
-          height: offset.height,
-        }),
+      const blocked = offsets.some(
+        (offset) =>
+          !isNodeRectFree({
+            x: candidateX + offset.x,
+            y: candidateY + offset.y,
+            width: offset.width,
+            height: offset.height,
+          }),
       );
 
       if (!blocked) {
@@ -2951,7 +2972,12 @@ export function RenderFlowEditor({ projectId, sessionId }: RenderFlowEditorProps
     return id;
   }
 
-  function createGeneratorNode(x: number, y: number, promptNodeId: string | null = null, sourceNodeId: string | null = null) {
+  function createGeneratorNode(
+    x: number,
+    y: number,
+    promptNodeId: string | null = null,
+    sourceNodeId: string | null = null,
+  ) {
     const id = `draft-generator-${crypto.randomUUID()}`;
     const position = findFreeNodePosition(x, y, GENERATOR_SIZE.width, GENERATOR_SIZE.height);
     setNodes((current) => [
@@ -3003,20 +3029,11 @@ export function RenderFlowEditor({ projectId, sessionId }: RenderFlowEditorProps
     return id;
   }
 
-  function createPipeline(
-    x: number,
-    y: number,
-    preferredSourceNodeId: string | null = null,
-    includeSource = true,
-  ) {
-    const preferredSource = preferredSourceNodeId ? nodeById.get(preferredSourceNodeId) ?? null : null;
+  function createPipeline(x: number, y: number, preferredSourceNodeId: string | null = null, includeSource = true) {
+    const preferredSource = preferredSourceNodeId ? (nodeById.get(preferredSourceNodeId) ?? null) : null;
 
-    const rightMostEdge = nodes.length > 0
-      ? Math.max(...nodes.map((node) => node.x + node.width))
-      : x;
-    const topMostNode = nodes.length > 0
-      ? Math.min(...nodes.map((node) => node.y))
-      : y;
+    const rightMostEdge = nodes.length > 0 ? Math.max(...nodes.map((node) => node.x + node.width)) : x;
+    const topMostNode = nodes.length > 0 ? Math.min(...nodes.map((node) => node.y)) : y;
     const desiredX = Math.max(x, rightMostEdge + 180);
     const desiredY = Math.max(120, Math.min(y, topMostNode + 80));
     const { x: pipelineX, y: pipelineY } = findFreePipelinePosition(desiredX, desiredY);
@@ -3026,9 +3043,8 @@ export function RenderFlowEditor({ projectId, sessionId }: RenderFlowEditorProps
     const assistantId = `draft-assistant-${crypto.randomUUID()}`;
     const generatorId = `draft-generator-${crypto.randomUUID()}`;
     const number = nodes.filter((node) => node.kind === "IMAGE_GENERATOR").length + 1;
-    const nextSourceCount = nodes.filter(
-      (node) => node.kind === "IMAGE" && (node.data as ImageNodeData).role === "SOURCE",
-    ).length + 1;
+    const nextSourceCount =
+      nodes.filter((node) => node.kind === "IMAGE" && (node.data as ImageNodeData).role === "SOURCE").length + 1;
 
     // Source is optional for pipelines created from the Add menu. When enabled,
     // the pipeline gets its own empty/drop-ready Source Image card (or a copy of
@@ -3036,7 +3052,7 @@ export function RenderFlowEditor({ projectId, sessionId }: RenderFlowEditorProps
     // unchanged and always includes its Source Image card.
     const preferredSourceAsset =
       preferredSource?.kind === "IMAGE_GENERATOR"
-        ? (preferredSource.data as GeneratorNodeData).outputAsset ?? undefined
+        ? ((preferredSource.data as GeneratorNodeData).outputAsset ?? undefined)
         : preferredSource?.kind === "IMAGE"
           ? (preferredSource.data as ImageNodeData).asset
           : undefined;
@@ -3045,12 +3061,7 @@ export function RenderFlowEditor({ projectId, sessionId }: RenderFlowEditorProps
       const nextNodes: CanvasNode[] = [...current];
 
       if (includeSource) {
-        const sourcePosition = findFreeNodePosition(
-          pipelineX,
-          pipelineY + 330,
-          IMAGE_SIZE.width,
-          IMAGE_SIZE.height,
-        );
+        const sourcePosition = findFreeNodePosition(pipelineX, pipelineY + 330, IMAGE_SIZE.width, IMAGE_SIZE.height);
         nextNodes.push(
           makeImageNode({
             id: sourceId,
@@ -3121,13 +3132,7 @@ export function RenderFlowEditor({ projectId, sessionId }: RenderFlowEditorProps
   }
 
   function addFromMenu(
-    kind:
-      | "TEXT"
-      | "ASSISTANT"
-      | "IMAGE_GENERATOR"
-      | "REFERENCE"
-      | "SOURCE"
-      | "PIPELINE_WITHOUT_SOURCE",
+    kind: "TEXT" | "ASSISTANT" | "IMAGE_GENERATOR" | "REFERENCE" | "SOURCE" | "PIPELINE_WITHOUT_SOURCE",
   ) {
     if (!addMenu) return;
     const { worldX, worldY, pending } = addMenu;
@@ -3159,16 +3164,18 @@ export function RenderFlowEditor({ projectId, sessionId }: RenderFlowEditorProps
     }
 
     if (kind === "ASSISTANT") {
-      const textNodeId = pending && pending.outputType === "TEXT" && nodeById.get(pending.fromNodeId)?.kind === "TEXT"
-        ? pending.fromNodeId
-        : null;
+      const textNodeId =
+        pending && pending.outputType === "TEXT" && nodeById.get(pending.fromNodeId)?.kind === "TEXT"
+          ? pending.fromNodeId
+          : null;
       createAssistantNode(worldX, worldY, textNodeId);
       setPendingConnection(null);
     }
 
     if (kind === "IMAGE_GENERATOR") {
       const source = pending ? nodeById.get(pending.fromNodeId) : null;
-      const promptNodeId = (source?.kind === "ASSISTANT" || source?.kind === "TEXT") && pending?.outputType === "TEXT" ? source.id : null;
+      const promptNodeId =
+        (source?.kind === "ASSISTANT" || source?.kind === "TEXT") && pending?.outputType === "TEXT" ? source.id : null;
       const sourceNodeId =
         (source?.kind === "IMAGE" || source?.kind === "IMAGE_GENERATOR") && pending?.outputType === "IMAGE"
           ? source.id
@@ -3202,9 +3209,8 @@ export function RenderFlowEditor({ projectId, sessionId }: RenderFlowEditorProps
 
     const targetGeneratorId = referenceTargetGeneratorRef.current;
     const generator = targetGeneratorId ? nodeById.get(targetGeneratorId) : null;
-    const currentReferenceCount = generator?.kind === "IMAGE_GENERATOR"
-      ? (generator.data as GeneratorNodeData).referenceNodeIds.length
-      : 0;
+    const currentReferenceCount =
+      generator?.kind === "IMAGE_GENERATOR" ? (generator.data as GeneratorNodeData).referenceNodeIds.length : 0;
     const room = Math.max(0, 5 - currentReferenceCount);
     const accepted = Array.from(files)
       .filter((file) => isSupportedImageFile(file))
@@ -3228,10 +3234,7 @@ export function RenderFlowEditor({ projectId, sessionId }: RenderFlowEditorProps
         accepted.map(async (file) => {
           const formData = new FormData();
           formData.append("image", file);
-          return apiUpload<Asset>(
-            `/api/projects/${projectId}/image-sessions/${sessionId}/flow/images`,
-            formData,
-          );
+          return apiUpload<Asset>(`/api/projects/${projectId}/image-sessions/${sessionId}/flow/images`, formData);
         }),
       );
 
@@ -3321,7 +3324,9 @@ export function RenderFlowEditor({ projectId, sessionId }: RenderFlowEditorProps
       nodesRef.current.find(
         (node) => node.kind === "IMAGE_GENERATOR" && (node.data as GeneratorNodeData).promptNodeId === assistantId,
       ) ??
-      nodes.find((node) => node.kind === "IMAGE_GENERATOR" && (node.data as GeneratorNodeData).promptNodeId === assistantId)
+      nodes.find(
+        (node) => node.kind === "IMAGE_GENERATOR" && (node.data as GeneratorNodeData).promptNodeId === assistantId,
+      )
     );
   }
 
@@ -3335,7 +3340,9 @@ export function RenderFlowEditor({ projectId, sessionId }: RenderFlowEditorProps
     }
 
     const liveNodeById = new Map(nodesRef.current.map((candidate) => [candidate.id, candidate]));
-    const textNode = assistant.textNodeId ? liveNodeById.get(assistant.textNodeId) ?? nodeById.get(assistant.textNodeId) : null;
+    const textNode = assistant.textNodeId
+      ? (liveNodeById.get(assistant.textNodeId) ?? nodeById.get(assistant.textNodeId))
+      : null;
     const instruction = textNode?.kind === "TEXT" ? (textNode.data as TextNodeData).text.trim() : "";
 
     if (!instruction) {
@@ -3344,13 +3351,15 @@ export function RenderFlowEditor({ projectId, sessionId }: RenderFlowEditorProps
     }
 
     const downstreamGenerator =
-      downstreamGeneratorOverride?.kind === "IMAGE_GENERATOR" ? downstreamGeneratorOverride : downstreamGeneratorForAssistant(node.id);
-    const generatorData = downstreamGenerator?.kind === "IMAGE_GENERATOR"
-      ? (downstreamGenerator.data as GeneratorNodeData)
-      : null;
-    const sourceAsset = resolveSourceAsset(generatorData?.sourceNodeId ?? null)
-      ?? flowData.session.assets.find((asset) => asset.type === "ORIGINAL")
-      ?? flowData.session.assets[0];
+      downstreamGeneratorOverride?.kind === "IMAGE_GENERATOR"
+        ? downstreamGeneratorOverride
+        : downstreamGeneratorForAssistant(node.id);
+    const generatorData =
+      downstreamGenerator?.kind === "IMAGE_GENERATOR" ? (downstreamGenerator.data as GeneratorNodeData) : null;
+    const sourceAsset =
+      resolveSourceAsset(generatorData?.sourceNodeId ?? null) ??
+      flowData.session.assets.find((asset) => asset.type === "ORIGINAL") ??
+      flowData.session.assets[0];
 
     if (!sourceAsset) {
       setError("The Assistant needs a source image context for this render session.");
@@ -3410,7 +3419,9 @@ export function RenderFlowEditor({ projectId, sessionId }: RenderFlowEditorProps
       return null;
     }
     const liveNodeById = new Map(nodesRef.current.map((candidate) => [candidate.id, candidate]));
-    const promptNode = generator.promptNodeId ? liveNodeById.get(generator.promptNodeId) ?? nodeById.get(generator.promptNodeId) : null;
+    const promptNode = generator.promptNodeId
+      ? (liveNodeById.get(generator.promptNodeId) ?? nodeById.get(generator.promptNodeId))
+      : null;
     if (!promptNode || (promptNode.kind !== "ASSISTANT" && promptNode.kind !== "TEXT")) {
       setError("Connect a Text or Assistant node to the prompt port first.");
       return null;
@@ -3426,7 +3437,9 @@ export function RenderFlowEditor({ projectId, sessionId }: RenderFlowEditorProps
         setError("Run the connected Assistant first so the refined prompt is ready.");
         return null;
       }
-      const textNode = assistant.textNodeId ? liveNodeById.get(assistant.textNodeId) ?? nodeById.get(assistant.textNodeId) : null;
+      const textNode = assistant.textNodeId
+        ? (liveNodeById.get(assistant.textNodeId) ?? nodeById.get(assistant.textNodeId))
+        : null;
       instruction = textNode?.kind === "TEXT" ? (textNode.data as TextNodeData).text.trim() : "";
       if (!instruction) {
         setError("The connected Assistant has no Text input.");
@@ -3450,14 +3463,14 @@ export function RenderFlowEditor({ projectId, sessionId }: RenderFlowEditorProps
     const existingGeneration = generator.generationId ? generationById.get(generator.generationId) : null;
     const canRetryExisting = Boolean(
       existingGeneration &&
-        (existingGeneration.status === "FAILED" || existingGeneration.status === "CANCELED") &&
-        !existingGeneration.outputAsset &&
-        existingGeneration.sourceAssetId === sourceAsset.id &&
-        existingGeneration.userInstruction.trim() === instruction &&
-        existingGeneration.refinedPrompt?.trim() === refinedPrompt &&
-        existingGeneration.preserveMode === generator.preserveMode &&
-        existingGeneration.preserveEverythingElse === generator.preserveEverythingElse &&
-        existingGeneration.imageProvider === generator.imageProvider,
+      (existingGeneration.status === "FAILED" || existingGeneration.status === "CANCELED") &&
+      !existingGeneration.outputAsset &&
+      existingGeneration.sourceAssetId === sourceAsset.id &&
+      existingGeneration.userInstruction.trim() === instruction &&
+      existingGeneration.refinedPrompt?.trim() === refinedPrompt &&
+      existingGeneration.preserveMode === generator.preserveMode &&
+      existingGeneration.preserveEverythingElse === generator.preserveEverythingElse &&
+      existingGeneration.imageProvider === generator.imageProvider,
     );
 
     if (canRetryExisting && existingGeneration) {
@@ -3636,15 +3649,11 @@ export function RenderFlowEditor({ projectId, sessionId }: RenderFlowEditorProps
     }
 
     const affectedGenerationIds = new Set(
-      nodesToRemove
-        .map(getNodeGenerationId)
-        .filter((id): id is string => Boolean(id)),
+      nodesToRemove.map(getNodeGenerationId).filter((id): id is string => Boolean(id)),
     );
 
     const fullyRemovedGenerationIds = [...affectedGenerationIds].filter((generationId) =>
-      nodesBeforeRemove
-        .filter((node) => getNodeGenerationId(node) === generationId)
-        .every((node) => ids.has(node.id)),
+      nodesBeforeRemove.filter((node) => getNodeGenerationId(node) === generationId).every((node) => ids.has(node.id)),
     );
 
     const removedPersistentNodeIds = nodesToRemove
@@ -3656,12 +3665,8 @@ export function RenderFlowEditor({ projectId, sessionId }: RenderFlowEditorProps
       })
       .map((node) => node.id);
 
-    const nextHiddenGenerationIds = [
-      ...new Set([...hiddenGenerationIds, ...fullyRemovedGenerationIds]),
-    ];
-    const nextHiddenNodeIds = [
-      ...new Set([...hiddenNodeIds, ...removedPersistentNodeIds]),
-    ];
+    const nextHiddenGenerationIds = [...new Set([...hiddenGenerationIds, ...fullyRemovedGenerationIds])];
+    const nextHiddenNodeIds = [...new Set([...hiddenNodeIds, ...removedPersistentNodeIds])];
 
     const nextNodes: CanvasNode[] = nodesBeforeRemove
       .filter((item) => !ids.has(item.id))
@@ -3777,7 +3782,10 @@ export function RenderFlowEditor({ projectId, sessionId }: RenderFlowEditorProps
             onPointerDown={(event) =>
               startConnection(event, node, node.kind === "TEXT" || node.kind === "ASSISTANT" ? "TEXT" : "IMAGE")
             }
-            onClick={(event) => { event.preventDefault(); event.stopPropagation(); }}
+            onClick={(event) => {
+              event.preventDefault();
+              event.stopPropagation();
+            }}
             className="flex h-9 w-10 items-center justify-center rounded-lg text-white/75 hover:bg-white/[0.08] hover:text-white"
             title="Drag to connect output"
           >
@@ -3858,9 +3866,7 @@ export function RenderFlowEditor({ projectId, sessionId }: RenderFlowEditorProps
           data-flow-input-node={side === "LEFT" ? node.id : undefined}
           data-flow-input-label={side === "LEFT" ? label : undefined}
           onPointerDown={
-            side === "RIGHT"
-              ? (event) => startConnection(event, node, type)
-              : (event) => event.stopPropagation()
+            side === "RIGHT" ? (event) => startConnection(event, node, type) : (event) => event.stopPropagation()
           }
           onClick={(event) => {
             event.preventDefault();
@@ -3955,7 +3961,8 @@ export function RenderFlowEditor({ projectId, sessionId }: RenderFlowEditorProps
           onChange={(event) => {
             updateNode<TextNodeData>(node.id, (current) => ({ ...current, text: event.target.value }));
             const assistants = nodes.filter(
-              (candidate) => candidate.kind === "ASSISTANT" && (candidate.data as AssistantNodeData).textNodeId === node.id,
+              (candidate) =>
+                candidate.kind === "ASSISTANT" && (candidate.data as AssistantNodeData).textNodeId === node.id,
             );
             for (const assistant of assistants) {
               updateNode<AssistantNodeData>(assistant.id, (current) => ({
@@ -4143,7 +4150,11 @@ export function RenderFlowEditor({ projectId, sessionId }: RenderFlowEditorProps
               className="flex h-9 w-9 items-center justify-center rounded-full bg-white text-black transition hover:scale-105 disabled:opacity-40"
               title="Run Assistant"
             >
-              {running ? <LoaderCircle size={15} className="animate-spin" /> : <CirclePlay size={18} fill="currentColor" />}
+              {running ? (
+                <LoaderCircle size={15} className="animate-spin" />
+              ) : (
+                <CirclePlay size={18} fill="currentColor" />
+              )}
             </button>
           </div>
         </div>
@@ -4329,7 +4340,8 @@ export function RenderFlowEditor({ projectId, sessionId }: RenderFlowEditorProps
               void (async () => {
                 const created = await createImageNodesFromFiles([file], node.x - 310, node.y + 170);
                 const createdNode = created[0];
-                if (createdNode) await attachImageNodeToGenerator(node.id, createdNode.id, input === "PROMPT" ? undefined : input);
+                if (createdNode)
+                  await attachImageNodeToGenerator(node.id, createdNode.id, input === "PROMPT" ? undefined : input);
               })();
               return;
             }
@@ -4339,7 +4351,8 @@ export function RenderFlowEditor({ projectId, sessionId }: RenderFlowEditorProps
               void (async () => {
                 const created = await createImageNodesFromUrls(urls, node.x - 310, node.y + 170);
                 const createdNode = created[0];
-                if (createdNode) await attachImageNodeToGenerator(node.id, createdNode.id, input === "PROMPT" ? undefined : input);
+                if (createdNode)
+                  await attachImageNodeToGenerator(node.id, createdNode.id, input === "PROMPT" ? undefined : input);
               })();
               return;
             }
@@ -4468,7 +4481,8 @@ export function RenderFlowEditor({ projectId, sessionId }: RenderFlowEditorProps
                   updateNode<GeneratorNodeData>(node.id, (current) => ({
                     ...current,
                     preserveMode: event.target.value as PreserveMode,
-                    preserveEverythingElse: event.target.value === "NO_RESTRICTION" ? false : current.preserveEverythingElse,
+                    preserveEverythingElse:
+                      event.target.value === "NO_RESTRICTION" ? false : current.preserveEverythingElse,
                   }))
                 }
                 onPointerDown={(event) => event.stopPropagation()}
@@ -4480,7 +4494,10 @@ export function RenderFlowEditor({ projectId, sessionId }: RenderFlowEditorProps
                 <option value="CREATIVE">Creative</option>
                 <option value="NO_RESTRICTION">Free</option>
               </select>
-              <ChevronDown size={14} className="pointer-events-none absolute right-2 top-1/2 -translate-y-1/2 text-white/45" />
+              <ChevronDown
+                size={14}
+                className="pointer-events-none absolute right-2 top-1/2 -translate-y-1/2 text-white/45"
+              />
             </div>
 
             <button
@@ -4499,13 +4516,17 @@ export function RenderFlowEditor({ projectId, sessionId }: RenderFlowEditorProps
               <span
                 className={[
                   "relative h-4 w-7 rounded-full transition",
-                  data.preserveEverythingElse && data.preserveMode !== "NO_RESTRICTION" ? "bg-[#6557f6]" : "bg-white/[0.12]",
+                  data.preserveEverythingElse && data.preserveMode !== "NO_RESTRICTION"
+                    ? "bg-[#6557f6]"
+                    : "bg-white/[0.12]",
                 ].join(" ")}
               >
                 <span
                   className={[
                     "absolute top-[2px] h-3 w-3 rounded-full bg-white transition",
-                    data.preserveEverythingElse && data.preserveMode !== "NO_RESTRICTION" ? "left-[12px]" : "left-[2px]",
+                    data.preserveEverythingElse && data.preserveMode !== "NO_RESTRICTION"
+                      ? "left-[12px]"
+                      : "left-[2px]",
                   ].join(" ")}
                 />
               </span>
@@ -4587,7 +4608,10 @@ export function RenderFlowEditor({ projectId, sessionId }: RenderFlowEditorProps
             }
             startConnection(event, node, "IMAGE");
           }}
-          onClick={(event) => { event.preventDefault(); event.stopPropagation(); }}
+          onClick={(event) => {
+            event.preventDefault();
+            event.stopPropagation();
+          }}
           className="absolute -right-[43px] top-[54px] z-20 flex h-[34px] w-[34px] items-center justify-center rounded-full border border-white/[0.1] bg-[#252527] text-white/75 shadow-[0_7px_18px_rgba(0,0,0,0.35)] hover:bg-[#303033]"
           title="Generated image output"
         >
@@ -4757,7 +4781,9 @@ export function RenderFlowEditor({ projectId, sessionId }: RenderFlowEditorProps
           </button>
           <span className="h-5 w-px bg-white/[0.07]" />
           <div className="flex min-w-0 items-center gap-2 text-[13px]">
-            <span className="flex h-5 w-5 items-center justify-center rounded-[5px] bg-gradient-to-br from-orange-300 to-pink-500 text-[13px] text-black/80">E</span>
+            <span className="flex h-5 w-5 items-center justify-center rounded-[5px] bg-gradient-to-br from-orange-300 to-pink-500 text-[13px] text-black/80">
+              E
+            </span>
             <span className="max-w-[220px] truncate text-white/62">Eskander Plus Studio</span>
             <span className="text-white/20">›</span>
             <Link2 size={13} className="text-white/30" />
@@ -4855,7 +4881,8 @@ export function RenderFlowEditor({ projectId, sessionId }: RenderFlowEditorProps
         onDragOver={(event) => {
           const types = Array.from(event.dataTransfer.types ?? []);
           const hasImageFile = Array.from(event.dataTransfer.items).some((item) => isImageTransferItem(item));
-          const hasImageLikeString = types.includes("text/uri-list") || types.includes("text/html") || types.includes("text/plain");
+          const hasImageLikeString =
+            types.includes("text/uri-list") || types.includes("text/html") || types.includes("text/plain");
           if (hasImageFile || hasImageLikeString) {
             event.preventDefault();
             event.dataTransfer.dropEffect = "copy";
@@ -4868,9 +4895,10 @@ export function RenderFlowEditor({ projectId, sessionId }: RenderFlowEditorProps
           event.preventDefault();
           event.stopPropagation();
           const world = screenToWorld(event.clientX, event.clientY);
-          const addPromise = files.length > 0
-            ? createImageNodesFromFiles(files, world.x, world.y)
-            : createImageNodesFromUrls(urls, world.x, world.y);
+          const addPromise =
+            files.length > 0
+              ? createImageNodesFromFiles(files, world.x, world.y)
+              : createImageNodesFromUrls(urls, world.x, world.y);
           void addPromise
             .then((created) => {
               if (created.length > 0) {
@@ -5064,13 +5092,21 @@ export function RenderFlowEditor({ projectId, sessionId }: RenderFlowEditorProps
         </div>
 
         <div className="absolute bottom-4 left-4 z-40 flex items-center gap-1 rounded-xl border border-white/[0.07] bg-[#18181a]/94 p-1.5 text-white/55 shadow-xl backdrop-blur">
-          <button onClick={() => zoomBy(-0.1)} className="flex h-8 w-8 items-center justify-center rounded-lg hover:bg-white/[0.06]" title="Zoom out">
+          <button
+            onClick={() => zoomBy(-0.1)}
+            className="flex h-8 w-8 items-center justify-center rounded-lg hover:bg-white/[0.06]"
+            title="Zoom out"
+          >
             <ZoomOut size={14} />
           </button>
           <button onClick={fitView} className="min-w-[54px] px-1 text-[13px] hover:text-white" title="Fit view">
             {Math.round(camera.zoom * 100)}%
           </button>
-          <button onClick={() => zoomBy(0.1)} className="flex h-8 w-8 items-center justify-center rounded-lg hover:bg-white/[0.06]" title="Zoom in">
+          <button
+            onClick={() => zoomBy(0.1)}
+            className="flex h-8 w-8 items-center justify-center rounded-lg hover:bg-white/[0.06]"
+            title="Zoom in"
+          >
             <ZoomIn size={14} />
           </button>
           <span className="mx-1 h-5 w-px bg-white/[0.07]" />
@@ -5089,7 +5125,10 @@ export function RenderFlowEditor({ projectId, sessionId }: RenderFlowEditorProps
         {addMenu && (
           <div
             className="fixed z-[100] max-h-[calc(100vh-96px)] w-[285px] overflow-y-auto rounded-[13px] border border-white/[0.08] bg-[#202022]/98 shadow-[0_24px_70px_rgba(0,0,0,.45)] backdrop-blur-xl"
-            style={{ left: clamp(addMenu.screenX, 88, window.innerWidth - 305), top: clamp(addMenu.screenY, 48, Math.max(48, window.innerHeight - 500)) }}
+            style={{
+              left: clamp(addMenu.screenX, 88, window.innerWidth - 305),
+              top: clamp(addMenu.screenY, 48, Math.max(48, window.innerHeight - 500)),
+            }}
             onPointerDown={(event) => event.stopPropagation()}
           >
             <div className="flex h-11 items-center gap-2 border-b border-white/[0.06] px-3 text-white/35">
@@ -5099,9 +5138,16 @@ export function RenderFlowEditor({ projectId, sessionId }: RenderFlowEditorProps
             <div className="p-1.5">
               {!addMenu.pending && (
                 <>
-                  <div className="px-3 pb-1 pt-1 text-[10px] font-semibold uppercase tracking-[0.16em] text-white/28">AI Pipeline</div>
-                  <button onClick={() => addFromMenu("PIPELINE_WITHOUT_SOURCE")} className="flex w-full items-center gap-3 rounded-lg px-3 py-2.5 text-left text-[13px] text-white/82 hover:bg-white/[0.06]">
-                    <span className="flex h-7 w-7 items-center justify-center rounded-md bg-[#4f79ff]/10 text-[#86a4ff]"><Link2 size={14} /></span>
+                  <div className="px-3 pb-1 pt-1 text-[10px] font-semibold uppercase tracking-[0.16em] text-white/28">
+                    AI Pipeline
+                  </div>
+                  <button
+                    onClick={() => addFromMenu("PIPELINE_WITHOUT_SOURCE")}
+                    className="flex w-full items-center gap-3 rounded-lg px-3 py-2.5 text-left text-[13px] text-white/82 hover:bg-white/[0.06]"
+                  >
+                    <span className="flex h-7 w-7 items-center justify-center rounded-md bg-[#4f79ff]/10 text-[#86a4ff]">
+                      <Link2 size={14} />
+                    </span>
                     <span className="flex flex-col">
                       <span>New AI pipeline</span>
                       <span className="text-[10px] text-white/35">No Source card</span>
@@ -5113,20 +5159,35 @@ export function RenderFlowEditor({ projectId, sessionId }: RenderFlowEditorProps
               {(!addMenu.pending || addMenu.pending.outputType === "TEXT") && (
                 <>
                   {!addMenu.pending && (
-                    <button onClick={() => addFromMenu("TEXT")} className="flex w-full items-center gap-3 rounded-lg px-3 py-2.5 text-left text-[13px] text-white/82 hover:bg-white/[0.06]">
-                      <span className="flex h-7 w-7 items-center justify-center rounded-md bg-[#8657f2]/14 text-[#ba9cff]"><Type size={14} /></span>
+                    <button
+                      onClick={() => addFromMenu("TEXT")}
+                      className="flex w-full items-center gap-3 rounded-lg px-3 py-2.5 text-left text-[13px] text-white/82 hover:bg-white/[0.06]"
+                    >
+                      <span className="flex h-7 w-7 items-center justify-center rounded-md bg-[#8657f2]/14 text-[#ba9cff]">
+                        <Type size={14} />
+                      </span>
                       Text
                     </button>
                   )}
                   {(!addMenu.pending || nodeById.get(addMenu.pending.fromNodeId)?.kind === "TEXT") && (
-                    <button onClick={() => addFromMenu("ASSISTANT")} className="flex w-full items-center gap-3 rounded-lg px-3 py-2.5 text-left text-[13px] text-white/82 hover:bg-white/[0.06]">
-                      <span className="flex h-7 w-7 items-center justify-center rounded-md bg-[#8657f2]/18 text-[#b899ff]"><Sparkles size={14} /></span>
+                    <button
+                      onClick={() => addFromMenu("ASSISTANT")}
+                      className="flex w-full items-center gap-3 rounded-lg px-3 py-2.5 text-left text-[13px] text-white/82 hover:bg-white/[0.06]"
+                    >
+                      <span className="flex h-7 w-7 items-center justify-center rounded-md bg-[#8657f2]/18 text-[#b899ff]">
+                        <Sparkles size={14} />
+                      </span>
                       Assistant (ChatGPT)
                     </button>
                   )}
                   {(!addMenu.pending || nodeById.get(addMenu.pending.fromNodeId)?.kind === "ASSISTANT") && (
-                    <button onClick={() => addFromMenu("IMAGE_GENERATOR")} className="flex w-full items-center gap-3 rounded-lg px-3 py-2.5 text-left text-[13px] text-white/82 hover:bg-white/[0.06]">
-                      <span className="flex h-7 w-7 items-center justify-center rounded-md bg-emerald-400/10 text-emerald-300"><FileImage size={14} /></span>
+                    <button
+                      onClick={() => addFromMenu("IMAGE_GENERATOR")}
+                      className="flex w-full items-center gap-3 rounded-lg px-3 py-2.5 text-left text-[13px] text-white/82 hover:bg-white/[0.06]"
+                    >
+                      <span className="flex h-7 w-7 items-center justify-center rounded-md bg-emerald-400/10 text-emerald-300">
+                        <FileImage size={14} />
+                      </span>
                       Image Generator (Gemini)
                     </button>
                   )}
@@ -5134,28 +5195,44 @@ export function RenderFlowEditor({ projectId, sessionId }: RenderFlowEditorProps
               )}
 
               {addMenu.pending?.outputType === "IMAGE" && (
-                <button onClick={() => addFromMenu("IMAGE_GENERATOR")} className="flex w-full items-center gap-3 rounded-lg px-3 py-2.5 text-left text-[13px] text-white/82 hover:bg-white/[0.06]">
-                  <span className="flex h-7 w-7 items-center justify-center rounded-md bg-emerald-400/10 text-emerald-300"><FileImage size={14} /></span>
+                <button
+                  onClick={() => addFromMenu("IMAGE_GENERATOR")}
+                  className="flex w-full items-center gap-3 rounded-lg px-3 py-2.5 text-left text-[13px] text-white/82 hover:bg-white/[0.06]"
+                >
+                  <span className="flex h-7 w-7 items-center justify-center rounded-md bg-emerald-400/10 text-emerald-300">
+                    <FileImage size={14} />
+                  </span>
                   Image Generator (use as source)
                 </button>
               )}
 
               {!addMenu.pending && (
-                <button onClick={() => addFromMenu("SOURCE")} className="flex w-full items-center gap-3 rounded-lg px-3 py-2.5 text-left text-[13px] text-white/82 hover:bg-white/[0.06]">
-                  <span className="flex h-7 w-7 items-center justify-center rounded-md bg-emerald-400/10 text-emerald-300"><ImagePlus size={14} /></span>
+                <button
+                  onClick={() => addFromMenu("SOURCE")}
+                  className="flex w-full items-center gap-3 rounded-lg px-3 py-2.5 text-left text-[13px] text-white/82 hover:bg-white/[0.06]"
+                >
+                  <span className="flex h-7 w-7 items-center justify-center rounded-md bg-emerald-400/10 text-emerald-300">
+                    <ImagePlus size={14} />
+                  </span>
                   Source Image card
                 </button>
               )}
 
               {!addMenu.pending && (
-                <button onClick={() => addFromMenu("REFERENCE")} className="flex w-full items-center gap-3 rounded-lg px-3 py-2.5 text-left text-[13px] text-white/82 hover:bg-white/[0.06]">
-                  <span className="flex h-7 w-7 items-center justify-center rounded-md bg-cyan-400/10 text-cyan-300"><ImagePlus size={14} /></span>
+                <button
+                  onClick={() => addFromMenu("REFERENCE")}
+                  className="flex w-full items-center gap-3 rounded-lg px-3 py-2.5 text-left text-[13px] text-white/82 hover:bg-white/[0.06]"
+                >
+                  <span className="flex h-7 w-7 items-center justify-center rounded-md bg-cyan-400/10 text-cyan-300">
+                    <ImagePlus size={14} />
+                  </span>
                   Upload reference image
                 </button>
               )}
             </div>
             <div className="flex items-center justify-end gap-3 border-t border-white/[0.05] px-3 py-2 text-[13px] text-white/24">
-              <span>↑↓ Navigate</span><span>↵ Insert</span>
+              <span>↑↓ Navigate</span>
+              <span>↵ Insert</span>
             </div>
           </div>
         )}
@@ -5171,7 +5248,9 @@ export function RenderFlowEditor({ projectId, sessionId }: RenderFlowEditorProps
               <div className="mb-2 flex items-start gap-2 rounded-xl border border-red-500/20 bg-[#251719]/95 px-4 py-3 text-[13px] leading-5 text-red-200 shadow-xl backdrop-blur">
                 <AlertCircle size={14} className="mt-0.5 shrink-0" />
                 <span>{error}</span>
-                <button onClick={() => setError(null)} className="ml-auto p-1 text-red-200/50 hover:text-red-100"><X size={12} /></button>
+                <button onClick={() => setError(null)} className="ml-auto p-1 text-red-200/50 hover:text-red-100">
+                  <X size={12} />
+                </button>
               </div>
             )}
             {toast && (

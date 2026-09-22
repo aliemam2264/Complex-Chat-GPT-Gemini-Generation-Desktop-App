@@ -3,14 +3,14 @@ const path = require("node:path");
 module.exports = {
   packagerConfig: {
     asar: true,
-    executableName: "EskanderPlusStudio",
-    appCopyright: "Copyright (c) Eskander Plus Studio",
+    executableName: "EPlusAISuit",
+    appCopyright: "Copyright (c) E + AI Suit",
     win32metadata: {
-      CompanyName: "Eskander Plus Studio",
-      FileDescription: "Eskander Plus Studio desktop application",
-      InternalName: "EskanderPlusStudio",
-      OriginalFilename: "EskanderPlusStudio.exe",
-      ProductName: "Eskander Plus Studio",
+      CompanyName: "E + AI Suit",
+      FileDescription: "E + AI Suit desktop application",
+      InternalName: "EPlusAISuit",
+      OriginalFilename: "EPlusAISuit.exe",
+      ProductName: "E + AI Suit",
     },
     icon: path.resolve(__dirname, "assets", "icon.ico"),
     extraResource: [
@@ -26,10 +26,6 @@ module.exports = {
       /^\/packaging($|\/)/,
       /^\/apps\/web\/\.next($|\/)/,
       /^\/apps\/web\/node_modules($|\/)/,
-      /^\/(?:.*\/)?\.env(?:\..*)?$/,
-      /^\/packages\/database\/dev\.sqlite(?:-.*)?$/,
-      /^\/packages\/database\/prisma\/migrations_postgresql_backup($|\/)/,
-      /\.flow-backup-[^/]+$/,
       /\.log$/,
       /\.zip$/,
     ],
@@ -43,10 +39,10 @@ module.exports = {
     {
       name: "@electron-forge/maker-squirrel",
       config: {
-        name: "EskanderPlusStudio",
-        authors: "Eskander Plus Studio",
+        name: "EPlusAISuit",
+        authors: "E + AI Suit",
         description: "Local-first AI image editing studio.",
-        setupExe: "EskanderPlusStudio-Setup.exe",
+        setupExe: "EPlusAISuit-Setup.exe",
         setupIcon: path.resolve(__dirname, "assets", "icon.ico"),
         noMsi: true,
       },

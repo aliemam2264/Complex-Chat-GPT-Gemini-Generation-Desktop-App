@@ -3,7 +3,13 @@ import { mkdir, readFile, writeFile } from "node:fs/promises";
 
 import { basename, extname, join } from "node:path";
 
-import { chromium, type BrowserContext, type Locator, type Page, type Response as PlaywrightResponse } from "playwright";
+import {
+  chromium,
+  type BrowserContext,
+  type Locator,
+  type Page,
+  type Response as PlaywrightResponse,
+} from "playwright";
 
 import type { ImageGenerationInput, ImageGenerationResult, ImageProvider } from "./types";
 
@@ -206,7 +212,9 @@ export class GeminiBrowserImageProvider implements ImageProvider {
 
       return cookies.some((cookie) => {
         const googleCookie =
-          cookie.domain.includes("google.") || cookie.domain.endsWith("google.com") || cookie.domain.endsWith("google.com.eg");
+          cookie.domain.includes("google.") ||
+          cookie.domain.endsWith("google.com") ||
+          cookie.domain.endsWith("google.com.eg");
 
         return googleCookie && authenticatedCookieNames.has(cookie.name);
       });
@@ -291,12 +299,11 @@ export class GeminiBrowserImageProvider implements ImageProvider {
 
     while (Date.now() < deadline) {
       const composer = await this.findComposer(page);
-      const [hasGoogleSession, hasAccountControl, hasSignInControl] =
-        await Promise.all([
-          this.hasGoogleSession(page),
-          this.hasVisibleAccountControl(page),
-          this.hasVisibleSignInControl(page),
-        ]);
+      const [hasGoogleSession, hasAccountControl, hasSignInControl] = await Promise.all([
+        this.hasGoogleSession(page),
+        this.hasVisibleAccountControl(page),
+        this.hasVisibleSignInControl(page),
+      ]);
 
       if (hasSignInControl) {
         if (signInVisibleSince === null) {
@@ -308,10 +315,7 @@ export class GeminiBrowserImageProvider implements ImageProvider {
          * small grace period. If Sign in remains visible for 2.5 seconds and
          * no authenticated account control appeared, the profile is signed out.
          */
-        if (
-          Date.now() - signInVisibleSince >= 2_500 &&
-          !hasAccountControl
-        ) {
+        if (Date.now() - signInVisibleSince >= 2_500 && !hasAccountControl) {
           console.warn(
             "[Gemini] Visible Sign in control persisted. Treating the dedicated Gemini profile as disconnected.",
           );
@@ -378,9 +382,7 @@ export class GeminiBrowserImageProvider implements ImageProvider {
       throw new GeminiLoginRequiredError();
     }
 
-    throw new Error(
-      `Gemini session could not become ready. Current URL: ${page.url()}`,
-    );
+    throw new Error(`Gemini session could not become ready. Current URL: ${page.url()}`);
   }
 
   private async startFreshChat(page: Page) {
@@ -467,9 +469,7 @@ export class GeminiBrowserImageProvider implements ImageProvider {
 
     while (Date.now() < deadline) {
       if (page.isClosed()) {
-        throw new Error(
-          `Gemini browser page closed while the ${label} was uploading.`,
-        );
+        throw new Error(`Gemini browser page closed while the ${label} was uploading.`);
       }
 
       const state = await page
@@ -514,20 +514,12 @@ export class GeminiBrowserImageProvider implements ImageProvider {
             const rect = html.getBoundingClientRect();
             const style = window.getComputedStyle(html);
 
-            return (
-              rect.width > 0 &&
-              rect.height > 0 &&
-              style.display !== "none" &&
-              style.visibility !== "hidden"
-            );
+            return rect.width > 0 && rect.height > 0 && style.display !== "none" && style.visibility !== "hidden";
           };
 
           const countVisible = (selectors: string[]) =>
             selectors.reduce(
-              (total, selector) =>
-                total +
-                Array.from(document.querySelectorAll(selector)).filter(isVisible)
-                  .length,
+              (total, selector) => total + Array.from(document.querySelectorAll(selector)).filter(isVisible).length,
               0,
             );
 
@@ -537,9 +529,7 @@ export class GeminiBrowserImageProvider implements ImageProvider {
             Array.from(document.querySelectorAll(selector)).some(isVisible),
           );
 
-          const visibleImageCount = Array.from(
-            document.querySelectorAll<HTMLImageElement>("img"),
-          ).filter((image) => {
+          const visibleImageCount = Array.from(document.querySelectorAll<HTMLImageElement>("img")).filter((image) => {
             if (!isVisible(image)) {
               return false;
             }
@@ -554,9 +544,9 @@ export class GeminiBrowserImageProvider implements ImageProvider {
             return rect.width >= 32 && rect.height >= 32;
           }).length;
 
-          const inputHasFile = Array.from(
-            document.querySelectorAll<HTMLInputElement>('input[type="file"]'),
-          ).some((input) => (input.files?.length ?? 0) > 0);
+          const inputHasFile = Array.from(document.querySelectorAll<HTMLInputElement>('input[type="file"]')).some(
+            (input) => (input.files?.length ?? 0) > 0,
+          );
 
           const uploadError =
             bodyText.includes("failed to upload") ||
@@ -598,29 +588,24 @@ export class GeminiBrowserImageProvider implements ImageProvider {
       const sendUsable = await this.isSendControlUsable(page);
       const composer = await this.findComposer(page);
       const composerUsable =
-        state.composerVisible ||
-        (composer ? await composer.isVisible().catch(() => false) : false);
+        state.composerVisible || (composer ? await composer.isVisible().catch(() => false) : false);
 
-      const newAttachmentDom =
-        state.attachmentCount > baselineAttachmentCount;
-      const newImageThumbnail =
-        state.visibleImageCount > baselineVisibleImageCount;
+      const newAttachmentDom = state.attachmentCount > baselineAttachmentCount;
+      const newImageThumbnail = state.visibleImageCount > baselineVisibleImageCount;
 
       if (newAttachmentDom || newImageThumbnail || state.inputHasFile) {
         sawExplicitAttachment = true;
       }
 
       const uploadIdle = state.loadingCount === 0;
-      const explicitEvidence =
-        newAttachmentDom || newImageThumbnail || state.inputHasFile;
+      const explicitEvidence = newAttachmentDom || newImageThumbnail || state.inputHasFile;
 
       /*
        * Strongest path: a new attachment / thumbnail exists. If Gemini's Send
        * control is usable, let that override a stale loading node that remains
        * mounted after the actual upload has completed.
        */
-      const explicitReady =
-        explicitEvidence && (uploadIdle || sendUsable);
+      const explicitReady = explicitEvidence && (uploadIdle || sendUsable);
 
       if (explicitReady) {
         if (explicitReadySince === null) {
@@ -654,9 +639,7 @@ export class GeminiBrowserImageProvider implements ImageProvider {
         }
 
         if (Date.now() - sendReadySince >= 750) {
-          console.log(
-            `[Gemini] ${label} ready because the Send control became usable after file selection.`,
-          );
+          console.log(`[Gemini] ${label} ready because the Send control became usable after file selection.`);
           return;
         }
       } else {
@@ -672,8 +655,7 @@ export class GeminiBrowserImageProvider implements ImageProvider {
        * own verified send/retry handshake, so this fallback cannot silently mark
        * the generation successful; it merely stops a false upload timeout.
        */
-      const quietFallbackEligible =
-        elapsed >= 5_000 && sendUsable && !state.uploadError;
+      const quietFallbackEligible = elapsed >= 5_000 && sendUsable && !state.uploadError;
 
       if (quietFallbackEligible) {
         if (quietComposerSince === null) {
@@ -726,20 +708,12 @@ export class GeminiBrowserImageProvider implements ImageProvider {
         const disabledAttribute = html.hasAttribute("disabled");
         const className = (html.getAttribute("class") ?? "").toLowerCase();
 
-        const container = html.closest(
-          '[data-test-id="send-button-container"], [data-testid="send-button-container"]',
-        );
+        const container = html.closest('[data-test-id="send-button-container"], [data-testid="send-button-container"]');
 
         const containerDisabled =
-          container?.getAttribute("aria-disabled") === "true" ||
-          container?.hasAttribute("disabled") === true;
+          container?.getAttribute("aria-disabled") === "true" || container?.hasAttribute("disabled") === true;
 
-        return (
-          ariaDisabled !== "true" &&
-          !disabledAttribute &&
-          !containerDisabled &&
-          !className.includes("disabled")
-        );
+        return ariaDisabled !== "true" && !disabledAttribute && !containerDisabled && !className.includes("disabled");
       })
       .catch(() => false);
   }
@@ -892,19 +866,11 @@ export class GeminiBrowserImageProvider implements ImageProvider {
           const rect = html.getBoundingClientRect();
           const style = window.getComputedStyle(html);
 
-          return (
-            rect.width > 0 &&
-            rect.height > 0 &&
-            style.display !== "none" &&
-            style.visibility !== "hidden"
-          );
+          return rect.width > 0 && rect.height > 0 && style.display !== "none" && style.visibility !== "hidden";
         };
 
         return selectors.reduce(
-          (total, selector) =>
-            total +
-            Array.from(document.querySelectorAll(selector)).filter(isVisible)
-              .length,
+          (total, selector) => total + Array.from(document.querySelectorAll(selector)).filter(isVisible).length,
           0,
         );
       })
@@ -919,26 +885,15 @@ export class GeminiBrowserImageProvider implements ImageProvider {
           const rect = html.getBoundingClientRect();
           const style = window.getComputedStyle(html);
 
-          return (
-            rect.width >= 32 &&
-            rect.height >= 32 &&
-            style.display !== "none" &&
-            style.visibility !== "hidden"
-          );
+          return rect.width >= 32 && rect.height >= 32 && style.display !== "none" && style.visibility !== "hidden";
         };
 
-        return Array.from(document.querySelectorAll<HTMLImageElement>("img")).filter(
-          isVisible,
-        ).length;
+        return Array.from(document.querySelectorAll<HTMLImageElement>("img")).filter(isVisible).length;
       })
       .catch(() => 0);
   }
 
-  private async uploadImage(
-    page: Page,
-    imagePath: string,
-    label = "source image",
-  ) {
+  private async uploadImage(page: Page, imagePath: string, label = "source image") {
     console.log(`[Gemini] Starting ${label} upload...`);
 
     /*
@@ -949,12 +904,11 @@ export class GeminiBrowserImageProvider implements ImageProvider {
     await page.bringToFront().catch(() => undefined);
     await page.waitForTimeout(1000);
 
-    const [baselineAttachmentCount, baselineVisibleImageCount, baselineSendUsable] =
-      await Promise.all([
-        this.getVisibleAttachmentEvidenceCount(page),
-        this.getVisibleImageEvidenceCount(page),
-        this.isSendControlUsable(page),
-      ]);
+    const [baselineAttachmentCount, baselineVisibleImageCount, baselineSendUsable] = await Promise.all([
+      this.getVisibleAttachmentEvidenceCount(page),
+      this.getVisibleImageEvidenceCount(page),
+      this.isSendControlUsable(page),
+    ]);
 
     const alreadyOpenUploadItem = await this.findExistingUploadMenuItem(page);
 
@@ -1017,12 +971,12 @@ export class GeminiBrowserImageProvider implements ImageProvider {
       await existingInput.last().setInputFiles(imagePath);
 
       await this.waitForUploadToSettle(
-          page,
-          baselineAttachmentCount,
-          baselineVisibleImageCount,
-          baselineSendUsable,
-          label,
-        );
+        page,
+        baselineAttachmentCount,
+        baselineVisibleImageCount,
+        baselineSendUsable,
+        label,
+      );
 
       return;
     }
@@ -1121,12 +1075,12 @@ export class GeminiBrowserImageProvider implements ImageProvider {
       await inputAfterOpening.last().setInputFiles(imagePath);
 
       await this.waitForUploadToSettle(
-          page,
-          baselineAttachmentCount,
-          baselineVisibleImageCount,
-          baselineSendUsable,
-          label,
-        );
+        page,
+        baselineAttachmentCount,
+        baselineVisibleImageCount,
+        baselineSendUsable,
+        label,
+      );
 
       return;
     }
@@ -1266,12 +1220,12 @@ export class GeminiBrowserImageProvider implements ImageProvider {
       await fileChooser.setFiles(imagePath);
 
       await this.waitForUploadToSettle(
-          page,
-          baselineAttachmentCount,
-          baselineVisibleImageCount,
-          baselineSendUsable,
-          label,
-        );
+        page,
+        baselineAttachmentCount,
+        baselineVisibleImageCount,
+        baselineSendUsable,
+        label,
+      );
 
       return;
     }
@@ -1291,12 +1245,12 @@ export class GeminiBrowserImageProvider implements ImageProvider {
       await dynamicInput.last().setInputFiles(imagePath);
 
       await this.waitForUploadToSettle(
-          page,
-          baselineAttachmentCount,
-          baselineVisibleImageCount,
-          baselineSendUsable,
-          label,
-        );
+        page,
+        baselineAttachmentCount,
+        baselineVisibleImageCount,
+        baselineSendUsable,
+        label,
+      );
 
       return;
     }
@@ -1305,9 +1259,7 @@ export class GeminiBrowserImageProvider implements ImageProvider {
   }
 
   private async getComposerText(composer: Locator): Promise<string> {
-    const tagName = await composer
-      .evaluate((element) => element.tagName.toLowerCase())
-      .catch(() => "");
+    const tagName = await composer.evaluate((element) => element.tagName.toLowerCase()).catch(() => "");
 
     if (tagName === "textarea" || tagName === "input") {
       return composer.inputValue().catch(() => "");
@@ -1326,8 +1278,8 @@ export class GeminiBrowserImageProvider implements ImageProvider {
       'gem-icon-button.send-button mat-icon[data-mat-icon-name="stop_circle"]',
       'mat-icon[data-mat-icon-name="stop"]',
       'mat-icon[fonticon="stop"]',
-      'mat-progress-bar',
-      'section.processing-state_container--processing',
+      "mat-progress-bar",
+      "section.processing-state_container--processing",
     ];
 
     for (const selector of generatingSelectors) {
@@ -1335,7 +1287,12 @@ export class GeminiBrowserImageProvider implements ImageProvider {
       const count = await locator.count().catch(() => 0);
 
       for (let index = count - 1; index >= 0; index -= 1) {
-        if (await locator.nth(index).isVisible().catch(() => false)) {
+        if (
+          await locator
+            .nth(index)
+            .isVisible()
+            .catch(() => false)
+        ) {
           return true;
         }
       }
@@ -1368,9 +1325,7 @@ export class GeminiBrowserImageProvider implements ImageProvider {
         return true;
       }
 
-      const composerText = (await this.getComposerText(composer))
-        .replace(/\s+/g, " ")
-        .trim();
+      const composerText = (await this.getComposerText(composer)).replace(/\s+/g, " ").trim();
 
       if (!composerText && !composerClearLogged) {
         /*
@@ -1385,9 +1340,7 @@ export class GeminiBrowserImageProvider implements ImageProvider {
       }
 
       if (!composerText && (await this.isGeminiGenerating(page))) {
-        console.log(
-          "[Gemini] Submission confirmed because the composer cleared and Gemini started processing.",
-        );
+        console.log("[Gemini] Submission confirmed because the composer cleared and Gemini started processing.");
         return true;
       }
 
@@ -1427,10 +1380,7 @@ export class GeminiBrowserImageProvider implements ImageProvider {
 
       const currentUrl = page.url();
 
-      if (
-        currentUrl !== baseline.url &&
-        /gemini\.google\.com\/app\//i.test(currentUrl)
-      ) {
+      if (currentUrl !== baseline.url && /gemini\.google\.com\/app\//i.test(currentUrl)) {
         console.log("[Gemini] Submission confirmed by conversation URL change.");
         return true;
       }
@@ -1459,9 +1409,9 @@ export class GeminiBrowserImageProvider implements ImageProvider {
       'gem-icon-button[aria-label="Send"]',
       'button[aria-label="إرسال الرسالة"]',
       'button[aria-label="إرسال"]',
-      'gem-icon-button.send-button',
-      'button.send-button',
-      '.send-button',
+      "gem-icon-button.send-button",
+      "button.send-button",
+      ".send-button",
     ];
 
     for (const selector of selectors) {
@@ -1482,11 +1432,7 @@ export class GeminiBrowserImageProvider implements ImageProvider {
             const control = nestedButton ?? host;
             const icons = Array.from(host.querySelectorAll("mat-icon"))
               .map((icon) =>
-                [
-                  icon.getAttribute("data-mat-icon-name"),
-                  icon.getAttribute("fonticon"),
-                  icon.textContent,
-                ]
+                [icon.getAttribute("data-mat-icon-name"), icon.getAttribute("fonticon"), icon.textContent]
                   .filter(Boolean)
                   .join(" "),
               )
@@ -1501,10 +1447,7 @@ export class GeminiBrowserImageProvider implements ImageProvider {
               text: host.innerText ?? host.textContent ?? "",
               icons,
               className: host.className || "",
-              ariaDisabled:
-                control.getAttribute("aria-disabled") ??
-                host.getAttribute("aria-disabled") ??
-                "",
+              ariaDisabled: control.getAttribute("aria-disabled") ?? host.getAttribute("aria-disabled") ?? "",
               disabled:
                 (control instanceof HTMLButtonElement && control.disabled) ||
                 control.hasAttribute("disabled") ||
@@ -1616,11 +1559,7 @@ ${prompt}
 
       const url = request.url();
 
-      if (
-        !/StreamGenerate|GenerateContent|BardFrontendService|batchexecute|conversation|generate/i.test(
-          url,
-        )
-      ) {
+      if (!/StreamGenerate|GenerateContent|BardFrontendService|batchexecute|conversation|generate/i.test(url)) {
         return;
       }
 
@@ -1660,17 +1599,13 @@ ${prompt}
         await composer.fill(finalPrompt);
         await composer.dispatchEvent("input").catch(() => undefined);
 
-        const enteredText = (await this.getComposerText(composer))
-          .replace(/\s+/g, " ")
-          .trim();
+        const enteredText = (await this.getComposerText(composer)).replace(/\s+/g, " ").trim();
 
         if (enteredText.length < Math.min(40, finalPrompt.length)) {
           throw new Error("Gemini prompt composer did not accept the prompt text.");
         }
 
-        console.log(
-          `[Gemini] Prompt entered (${enteredText.length} chars). Submission attempt ${attempt}/3.`,
-        );
+        console.log(`[Gemini] Prompt entered (${enteredText.length} chars). Submission attempt ${attempt}/3.`);
 
         networkSubmitted = false;
         submissionArmed = false;
@@ -1766,28 +1701,21 @@ ${prompt}
          * nothing actually started, wait briefly and retry the whole fill+send
          * sequence. Never close the page between these attempts.
          */
-        console.warn(
-          `[Gemini] Submission attempt ${attempt}/3 produced no activity. Retrying on the same page...`,
-        );
+        console.warn(`[Gemini] Submission attempt ${attempt}/3 produced no activity. Retrying on the same page...`);
 
         await page.waitForTimeout(1_500);
       }
 
       await this.dumpUploadDebugInfo(page).catch(() => undefined);
 
-      throw new Error(
-        "Gemini did not accept the prompt after 3 verified send attempts. The page stayed idle.",
-      );
+      throw new Error("Gemini did not accept the prompt after 3 verified send attempts. The page stayed idle.");
     } finally {
       page.off("request", onRequest);
     }
   }
 
   private getGenerationTimeoutMs() {
-    const configured = Number.parseInt(
-      process.env.GEMINI_GENERATION_TIMEOUT_MS ?? "",
-      10,
-    );
+    const configured = Number.parseInt(process.env.GEMINI_GENERATION_TIMEOUT_MS ?? "", 10);
 
     if (!Number.isFinite(configured)) {
       return DEFAULT_GENERATION_TIMEOUT_MS;
@@ -1940,14 +1868,8 @@ ${prompt}
          * response. Never promote a tiny on-screen thumbnail to a completed
          * generated asset, even when its natural source is high resolution.
          */
-        const renderedLongEdge = Math.max(
-          candidate.renderedWidth,
-          candidate.renderedHeight,
-        );
-        const renderedShortEdge = Math.min(
-          candidate.renderedWidth,
-          candidate.renderedHeight,
-        );
+        const renderedLongEdge = Math.max(candidate.renderedWidth, candidate.renderedHeight);
+        const renderedShortEdge = Math.min(candidate.renderedWidth, candidate.renderedHeight);
 
         if (scopedOnly) {
           if (renderedLongEdge < 240 || renderedShortEdge < 140) {
@@ -2027,8 +1949,7 @@ ${prompt}
             const blob = await response.blob();
             const dataUrl = await new Promise<string>((resolve) => {
               const reader = new FileReader();
-              reader.onload = () =>
-                resolve(typeof reader.result === "string" ? reader.result : "");
+              reader.onload = () => resolve(typeof reader.result === "string" ? reader.result : "");
               reader.onerror = () => resolve("");
               reader.readAsDataURL(blob);
             });
@@ -2063,27 +1984,21 @@ ${prompt}
       return null;
     }
 
-    const match = /^data:(image\/[a-zA-Z0-9.+-]+);base64,(.+)$/s.exec(
-      captured.dataUrl,
-    );
+    const match = /^data:(image\/[a-zA-Z0-9.+-]+);base64,(.+)$/s.exec(captured.dataUrl);
 
     if (!match) {
       return null;
     }
 
     if (captured.width < 320 || captured.height < 320) {
-      console.warn(
-        `[Gemini] Rejected low-resolution result capture: ${captured.width}x${captured.height}.`,
-      );
+      console.warn(`[Gemini] Rejected low-resolution result capture: ${captured.width}x${captured.height}.`);
       return null;
     }
 
     const mimeType = match[1];
     const extension = this.getExtensionFromMimeType(mimeType);
 
-    console.log(
-      `[Gemini] Captured full-resolution generated image bytes: ${captured.width}x${captured.height}.`,
-    );
+    console.log(`[Gemini] Captured full-resolution generated image bytes: ${captured.width}x${captured.height}.`);
 
     return {
       buffer: Buffer.from(match[2], "base64"),
@@ -2094,10 +2009,7 @@ ${prompt}
     };
   }
 
-  private getImageDimensionsFromBuffer(
-    buffer: Buffer,
-    mimeType: string,
-  ): { width: number; height: number } | null {
+  private getImageDimensionsFromBuffer(buffer: Buffer, mimeType: string): { width: number; height: number } | null {
     const normalized = mimeType.toLowerCase().split(";")[0].trim();
 
     try {
@@ -2118,10 +2030,7 @@ ${prompt}
           }
 
           const marker = buffer[offset + 1];
-          const isStartOfFrame =
-            marker >= 0xc0 &&
-            marker <= 0xcf &&
-            ![0xc4, 0xc8, 0xcc].includes(marker);
+          const isStartOfFrame = marker >= 0xc0 && marker <= 0xcf && ![0xc4, 0xc8, 0xcc].includes(marker);
 
           if (isStartOfFrame) {
             return {
@@ -2153,10 +2062,8 @@ ${prompt}
         const chunk = buffer.toString("ascii", 12, 16);
 
         if (chunk === "VP8X" && buffer.length >= 30) {
-          const width =
-            1 + buffer[24] + (buffer[25] << 8) + (buffer[26] << 16);
-          const height =
-            1 + buffer[27] + (buffer[28] << 8) + (buffer[29] << 16);
+          const width = 1 + buffer[24] + (buffer[25] << 8) + (buffer[26] << 16);
+          const height = 1 + buffer[27] + (buffer[28] << 8) + (buffer[29] << 16);
 
           return { width, height };
         }
@@ -2186,6 +2093,93 @@ ${prompt}
     return null;
   }
 
+  private getNetworkImageCandidateScore(candidate: NetworkImageCandidate) {
+    const area = candidate.width > 0 && candidate.height > 0 ? candidate.width * candidate.height : 0;
+    return candidate.byteLength + area * 0.08;
+  }
+
+  private isBetterNetworkImageCandidate(candidate: NetworkImageCandidate, current: NetworkImageCandidate | null) {
+    if (!current) {
+      return true;
+    }
+
+    const candidateScore = this.getNetworkImageCandidateScore(candidate);
+    const currentScore = this.getNetworkImageCandidateScore(current);
+
+    if (candidateScore > currentScore * 1.03) {
+      return true;
+    }
+
+    if (candidate.byteLength > current.byteLength * 1.08) {
+      return true;
+    }
+
+    const candidateArea = candidate.width * candidate.height;
+    const currentArea = current.width * current.height;
+
+    if (candidateArea > 0 && candidateArea > currentArea * 1.08) {
+      return true;
+    }
+
+    return false;
+  }
+
+  private isLikelyFullResolutionNetworkCandidate(candidate: NetworkImageCandidate) {
+    const longEdge = Math.max(candidate.width, candidate.height);
+    const shortEdge = Math.min(candidate.width, candidate.height);
+
+    if (longEdge >= 900 && shortEdge >= 512 && candidate.byteLength >= 180_000) {
+      return true;
+    }
+
+    if ((candidate.width === 0 || candidate.height === 0) && candidate.byteLength >= 500_000) {
+      return true;
+    }
+
+    return false;
+  }
+
+  private getSnapshotScore(snapshot: GeneratedImageSnapshot) {
+    const area = snapshot.width > 0 && snapshot.height > 0 ? snapshot.width * snapshot.height : 0;
+    return snapshot.buffer.byteLength + area * 0.08;
+  }
+
+  private isBetterSnapshot(candidate: GeneratedImageSnapshot, current: GeneratedImageSnapshot | null) {
+    if (!current) {
+      return true;
+    }
+
+    const candidateScore = this.getSnapshotScore(candidate);
+    const currentScore = this.getSnapshotScore(current);
+
+    if (candidateScore > currentScore * 1.03) {
+      return true;
+    }
+
+    if (candidate.buffer.byteLength > current.buffer.byteLength * 1.08) {
+      return true;
+    }
+
+    const candidateArea = candidate.width * candidate.height;
+    const currentArea = current.width * current.height;
+
+    if (candidateArea > 0 && candidateArea > currentArea * 1.08) {
+      return true;
+    }
+
+    return false;
+  }
+
+  private networkCandidateToSnapshot(candidate: NetworkImageCandidate): GeneratedImageSnapshot {
+    return {
+      buffer: candidate.buffer,
+      mimeType: candidate.mimeType,
+      extension: candidate.extension,
+      width: candidate.width,
+      height: candidate.height,
+    };
+  }
+
   private async startGeneratedImageNetworkCapture(
     page: Page,
     sourceImagePath: string,
@@ -2213,10 +2207,7 @@ ${prompt}
           }
 
           const headers = response.headers();
-          const mimeType = (headers["content-type"] ?? "")
-            .split(";")[0]
-            .trim()
-            .toLowerCase();
+          const mimeType = (headers["content-type"] ?? "").split(";")[0].trim().toLowerCase();
 
           if (!mimeType.startsWith("image/")) {
             return;
@@ -2229,11 +2220,7 @@ ${prompt}
            * normally served from Google media/storage hosts, while UI assets
            * are mostly gstatic and are much smaller.
            */
-          if (
-            /fonts\.gstatic\.com|www\.gstatic\.com|ssl\.gstatic\.com/i.test(
-              url,
-            )
-          ) {
+          if (/fonts\.gstatic\.com|www\.gstatic\.com|ssl\.gstatic\.com/i.test(url)) {
             return;
           }
 
@@ -2243,9 +2230,7 @@ ${prompt}
             return;
           }
 
-          const responseHash = createHash("sha256")
-            .update(buffer)
-            .digest("hex");
+          const responseHash = createHash("sha256").update(buffer).digest("hex");
 
           /*
            * While uploads are settling, Gemini often downloads/re-encodes the
@@ -2261,9 +2246,7 @@ ${prompt}
           }
 
           if (sourceHash && responseHash === sourceHash) {
-            console.log(
-              "[Gemini] Ignored network image because it matches the uploaded source exactly.",
-            );
+            console.log("[Gemini] Ignored network image because it matches the uploaded source exactly.");
             return;
           }
 
@@ -2274,10 +2257,7 @@ ${prompt}
             return;
           }
 
-          const dimensions = this.getImageDimensionsFromBuffer(
-            buffer,
-            mimeType,
-          );
+          const dimensions = this.getImageDimensionsFromBuffer(buffer, mimeType);
 
           /*
            * A generated image can be landscape, portrait or square. Reject
@@ -2309,16 +2289,19 @@ ${prompt}
           };
 
           /*
-           * Prefer the newest qualifying image. Gemini can first send a
-           * preview and then replace it with the final media response.
+           * Keep the best-quality network image instead of the newest one.
+           * Gemini can request smaller previews after the final media is ready;
+           * choosing the last response can therefore downgrade the saved file.
            */
-          best = candidate;
+          if (this.isBetterNetworkImageCandidate(candidate, best)) {
+            best = candidate;
 
-          console.log(
-            `[Gemini] Captured network image candidate: ${candidate.width || "?"}x${candidate.height || "?"}, ${Math.round(
-              candidate.byteLength / 1024,
-            )} KB, ${candidate.url.slice(0, 180)}`,
-          );
+            console.log(
+              `[Gemini] Captured best network image candidate: ${candidate.width || "?"}x${candidate.height || "?"}, ${Math.round(
+                candidate.byteLength / 1024,
+              )} KB, ${candidate.url.slice(0, 180)}`,
+            );
+          }
         } catch {
           // Response bodies can become unavailable during navigation. DOM and
           // download fallbacks continue to run, so this is intentionally soft.
@@ -2376,9 +2359,7 @@ ${prompt}
 
       if (page.isClosed()) {
         throw new Error(
-          signal?.aborted
-            ? "Generation canceled."
-            : "Gemini browser page closed before generation finished.",
+          signal?.aborted ? "Generation canceled." : "Gemini browser page closed before generation finished.",
         );
       }
 
@@ -2386,7 +2367,8 @@ ${prompt}
 
       if (
         networkCandidate &&
-        Date.now() - networkCandidate.capturedAt >= 4_000
+        this.isLikelyFullResolutionNetworkCandidate(networkCandidate) &&
+        Date.now() - networkCandidate.capturedAt >= 6_000
       ) {
         console.log(
           `[Gemini] Using stable network image candidate after ${Math.round(
@@ -2427,36 +2409,23 @@ ${prompt}
            * stability grace period here.
            */
           const buttonCandidate =
-            generatedCandidate ??
-            (await this.findNewGeneratedImage(
-              page,
-              initialImageSignatures,
-              true,
-            ));
+            generatedCandidate ?? (await this.findNewGeneratedImage(page, initialImageSignatures, true));
 
           if (buttonCandidate) {
             generatedCandidate = buttonCandidate;
           }
 
-          let snapshot = buttonCandidate
-            ? await this.captureGeneratedImageSnapshot(page, buttonCandidate)
-            : null;
+          let snapshot = buttonCandidate ? await this.captureGeneratedImageSnapshot(page, buttonCandidate) : null;
 
-          if (!snapshot) {
-            const latestNetworkCandidate = networkCapture?.getBest() ?? null;
+          const latestNetworkCandidate = networkCapture?.getBest() ?? null;
 
-            if (latestNetworkCandidate) {
-              snapshot = {
-                buffer: latestNetworkCandidate.buffer,
-                mimeType: latestNetworkCandidate.mimeType,
-                extension: latestNetworkCandidate.extension,
-                width: latestNetworkCandidate.width,
-                height: latestNetworkCandidate.height,
-              };
+          if (latestNetworkCandidate) {
+            const networkSnapshot = this.networkCandidateToSnapshot(latestNetworkCandidate);
 
-              console.log(
-                "[Gemini] Download button appeared before DOM capture; keeping network bytes as download fallback.",
-              );
+            if (this.isBetterSnapshot(networkSnapshot, snapshot)) {
+              snapshot = networkSnapshot;
+
+              console.log("[Gemini] Download button path preferred the better network image bytes.");
             }
           }
 
@@ -2470,11 +2439,7 @@ ${prompt}
       }
 
       const elapsed = Date.now() - startedAt;
-      const detectedCandidate = await this.findNewGeneratedImage(
-        page,
-        initialImageSignatures,
-        elapsed >= 20_000,
-      );
+      const detectedCandidate = await this.findNewGeneratedImage(page, initialImageSignatures, elapsed >= 20_000);
 
       if (detectedCandidate) {
         generatedCandidate = detectedCandidate;
@@ -2488,9 +2453,7 @@ ${prompt}
               elapsed / 1000,
             )}s: natural=${detectedCandidate.naturalWidth}x${detectedCandidate.naturalHeight}, rendered=${Math.round(
               detectedCandidate.renderedWidth,
-            )}x${Math.round(
-              detectedCandidate.renderedHeight,
-            )}, scoped=${detectedCandidate.scopedToModelResponse}.`,
+            )}x${Math.round(detectedCandidate.renderedHeight)}, scoped=${detectedCandidate.scopedToModelResponse}.`,
           );
         }
 
@@ -2505,10 +2468,7 @@ ${prompt}
         const downloadButton = await this.findLastVisibleDownloadButton(page);
 
         if (downloadButton) {
-          const snapshot = await this.captureGeneratedImageSnapshot(
-            page,
-            detectedCandidate,
-          );
+          const snapshot = await this.captureGeneratedImageSnapshot(page, detectedCandidate);
 
           return {
             downloadButton,
@@ -2518,19 +2478,24 @@ ${prompt}
           };
         }
 
-        const stableFor =
-          candidateDetectedAt === null ? 0 : Date.now() - candidateDetectedAt;
-        const requiredStableMs = detectedCandidate.scopedToModelResponse
-          ? 5_000
-          : GENERATED_IMAGE_DOWNLOAD_GRACE_MS;
+        const stableFor = candidateDetectedAt === null ? 0 : Date.now() - candidateDetectedAt;
+        const requiredStableMs = detectedCandidate.scopedToModelResponse ? 5_000 : GENERATED_IMAGE_DOWNLOAD_GRACE_MS;
 
         if (stableFor >= requiredStableMs) {
-          const snapshot = await this.captureGeneratedImageSnapshot(
-            page,
-            detectedCandidate,
-          );
+          let snapshot = await this.captureGeneratedImageSnapshot(page, detectedCandidate);
 
           if (snapshot) {
+            const latestNetworkCandidate = networkCapture?.getBest() ?? null;
+
+            if (latestNetworkCandidate) {
+              const networkSnapshot = this.networkCandidateToSnapshot(latestNetworkCandidate);
+
+              if (this.isBetterSnapshot(networkSnapshot, snapshot)) {
+                snapshot = networkSnapshot;
+                console.log("[Gemini] DOM result path upgraded to the better network image bytes.");
+              }
+            }
+
             return {
               downloadButton: null,
               image: detectedCandidate.image,
@@ -2574,9 +2539,7 @@ ${prompt}
     const finalNetworkCandidate = networkCapture?.getBest() ?? null;
 
     if (finalNetworkCandidate) {
-      console.log(
-        "[Gemini] Generation wait reached its deadline; using the latest captured network image candidate.",
-      );
+      console.log("[Gemini] Generation wait reached its deadline; using the latest captured network image candidate.");
 
       return {
         downloadButton: null,
@@ -2593,10 +2556,7 @@ ${prompt}
     }
 
     if (generatedCandidate) {
-      const snapshot = await this.captureGeneratedImageSnapshot(
-        page,
-        generatedCandidate,
-      );
+      let snapshot = await this.captureGeneratedImageSnapshot(page, generatedCandidate);
 
       if (snapshot) {
         return {
@@ -2670,15 +2630,14 @@ ${prompt}
           scopedToModelResponse: true,
         });
 
-        if (fresh) {
+        if (fresh && this.isBetterSnapshot(fresh, fullResolutionSnapshot)) {
           fullResolutionSnapshot = fresh;
         }
       }
     }
 
     if (fullResolutionSnapshot) {
-      const fileName = `generated-${Date.now()}-${randomUUID()
-        .slice(0, 8)}${fullResolutionSnapshot.extension}`;
+      const fileName = `generated-${Date.now()}-${randomUUID().slice(0, 8)}${fullResolutionSnapshot.extension}`;
       const absolutePath = join(outputDirectory, basename(fileName));
 
       await writeFile(absolutePath, fullResolutionSnapshot.buffer);
@@ -2696,9 +2655,7 @@ ${prompt}
     }
 
     if (!image || page.isClosed()) {
-      throw new Error(
-        "Gemini generated an image, but the browser page closed before the result could be saved.",
-      );
+      throw new Error("Gemini generated an image, but the browser page closed before the result could be saved.");
     }
 
     const source = await image
@@ -2716,19 +2673,14 @@ ${prompt}
         });
 
         if (response.ok()) {
-          const mimeType =
-            response.headers()["content-type"]?.split(";")[0] || "image/png";
+          const mimeType = response.headers()["content-type"]?.split(";")[0] || "image/png";
           const extension = this.getExtensionFromMimeType(mimeType);
-          const fileName = `generated-${Date.now()}-${randomUUID()
-            .slice(0, 8)}${extension}`;
+          const fileName = `generated-${Date.now()}-${randomUUID().slice(0, 8)}${extension}`;
           const absolutePath = join(outputDirectory, basename(fileName));
 
           await writeFile(absolutePath, await response.body());
 
-          console.log(
-            "[Gemini] Result saved directly from generated image URL:",
-            absolutePath,
-          );
+          console.log("[Gemini] Result saved directly from generated image URL:", absolutePath);
 
           return {
             absolutePath,
@@ -2737,10 +2689,7 @@ ${prompt}
           };
         }
       } catch (error) {
-        console.warn(
-          "[Gemini] Could not download generated image URL directly. Falling back to screenshot:",
-          error,
-        );
+        console.warn("[Gemini] Could not download generated image URL directly. Falling back to screenshot:", error);
       }
     }
 
@@ -2825,10 +2774,7 @@ ${prompt}
        * fingerprints source/reference media so late attachment requests cannot
        * be mistaken for the generated result.
        */
-      networkCapture = await this.startGeneratedImageNetworkCapture(
-        page,
-        input.sourceImagePath,
-      );
+      networkCapture = await this.startGeneratedImageNetworkCapture(page, input.sourceImagePath);
 
       /*
        * 3. Upload the source image on THIS page only.
@@ -2853,15 +2799,9 @@ ${prompt}
           referenceImagePath,
         );
 
-        await this.uploadImage(
-          page,
-          referenceImagePath,
-          `reference image ${index + 1}/${referenceImagePaths.length}`,
-        );
+        await this.uploadImage(page, referenceImagePath, `reference image ${index + 1}/${referenceImagePaths.length}`);
 
-        console.log(
-          `[Gemini] Reference image ${index + 1}/${referenceImagePaths.length} uploaded successfully.`,
-        );
+        console.log(`[Gemini] Reference image ${index + 1}/${referenceImagePaths.length} uploaded successfully.`);
       }
 
       /*
@@ -2929,9 +2869,7 @@ ${input.prompt}`
         networkCapture,
       );
 
-      console.log(
-        `[Gemini] Generated image detected via ${detection.detectedBy}.`,
-      );
+      console.log(`[Gemini] Generated image detected via ${detection.detectedBy}.`);
 
       if (detection.downloadButton) {
         await mkdir(input.outputDirectory, {
@@ -2952,12 +2890,8 @@ ${input.prompt}`
 
           const suggestedName = download.suggestedFilename();
           const extension = extname(suggestedName) || ".png";
-          const fileName = `generated-${Date.now()}-${randomUUID()
-            .slice(0, 8)}${extension}`;
-          const absolutePath = join(
-            input.outputDirectory,
-            basename(fileName),
-          );
+          const fileName = `generated-${Date.now()}-${randomUUID().slice(0, 8)}${extension}`;
+          const absolutePath = join(input.outputDirectory, basename(fileName));
 
           await download.saveAs(absolutePath);
 
@@ -2969,10 +2903,7 @@ ${input.prompt}`
             mimeType: this.getMimeType(extension),
           };
         } catch (error) {
-          console.warn(
-            "[Gemini] Download control did not produce a file. Trying generated-image fallback:",
-            error,
-          );
+          console.warn("[Gemini] Download control did not produce a file. Trying generated-image fallback:", error);
 
           /*
            * Current Gemini builds do not always surface a browser download
@@ -2986,9 +2917,7 @@ ${input.prompt}`
           const postClickNetworkCandidate = networkCapture?.getBest() ?? null;
 
           if (postClickNetworkCandidate) {
-            console.log(
-              "[Gemini] Recovering generated image from network bytes after download-event failure.",
-            );
+            console.log("[Gemini] Recovering generated image from network bytes after download-event failure.");
 
             return this.saveGeneratedImageFallback(
               page,
@@ -3004,21 +2933,12 @@ ${input.prompt}`
             );
           }
 
-          const postClickImage = await this.findNewGeneratedImage(
-            page,
-            initialImageSignatures,
-            true,
-          );
+          const postClickImage = await this.findNewGeneratedImage(page, initialImageSignatures, true);
 
           if (postClickImage) {
-            const postClickSnapshot = await this.captureGeneratedImageSnapshot(
-              page,
-              postClickImage,
-            );
+            const postClickSnapshot = await this.captureGeneratedImageSnapshot(page, postClickImage);
 
-            console.log(
-              "[Gemini] Recovering generated image from DOM after download-event failure.",
-            );
+            console.log("[Gemini] Recovering generated image from DOM after download-event failure.");
 
             return this.saveGeneratedImageFallback(
               page,
@@ -3031,12 +2951,7 @@ ${input.prompt}`
       }
 
       if (detection.image || detection.snapshot) {
-        return this.saveGeneratedImageFallback(
-          page,
-          detection.image,
-          detection.snapshot,
-          input.outputDirectory,
-        );
+        return this.saveGeneratedImageFallback(page, detection.image, detection.snapshot, input.outputDirectory);
       }
 
       /*
@@ -3062,24 +2977,12 @@ ${input.prompt}`
         );
       }
 
-      const finalImageCandidate = await this.findNewGeneratedImage(
-        page,
-        initialImageSignatures,
-        true,
-      );
+      const finalImageCandidate = await this.findNewGeneratedImage(page, initialImageSignatures, true);
 
       if (finalImageCandidate) {
-        const finalSnapshot = await this.captureGeneratedImageSnapshot(
-          page,
-          finalImageCandidate,
-        );
+        const finalSnapshot = await this.captureGeneratedImageSnapshot(page, finalImageCandidate);
 
-        return this.saveGeneratedImageFallback(
-          page,
-          finalImageCandidate.image,
-          finalSnapshot,
-          input.outputDirectory,
-        );
+        return this.saveGeneratedImageFallback(page, finalImageCandidate.image, finalSnapshot, input.outputDirectory);
       }
 
       throw new Error(

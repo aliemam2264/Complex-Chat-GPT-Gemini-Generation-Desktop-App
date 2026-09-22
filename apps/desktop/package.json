@@ -4,7 +4,7 @@
   "private": true,
   "main": "dist/main.js",
   "scripts": {
-    "dev": "tsc && concurrently -k \"tsc -w\" \"wait-on http://127.0.0.1:3000 http-get://127.0.0.1:4000/health && electron .\"",
+    "dev": "tsc && concurrently -k \"tsc -w\" \"wait-on http://localhost:3000 && electron .\"",
     "build": "tsc"
   },
   "dependencies": {
@@ -16,5 +16,6 @@
     "electron": "^43.0.0",
     "typescript": "^5.9.0",
     "wait-on": "^8.0.0"
-  }
+  },
+  "productName": "E + AI Suit"
 }

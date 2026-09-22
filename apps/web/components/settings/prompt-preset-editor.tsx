@@ -117,7 +117,7 @@ export function PromptPresetEditor({
         <span>
           {preset.isCustomized
             ? "This user override replaces the hardcoded preset."
-            : "Using the hardcoded preset shipped with Eskander Plus Studio."}
+            : "Using the hardcoded preset shipped with E + AI Suit."}
         </span>
         <span>{draft.length}/6000</span>
       </div>

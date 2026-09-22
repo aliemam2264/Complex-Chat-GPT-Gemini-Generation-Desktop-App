@@ -13,8 +13,8 @@ const geist = Geist({
 });
 
 export const metadata: Metadata = {
-  title: "Eskander Plus Studio",
-  description: "Architectural AI workspace",
+  title: "E + AI Suit",
+  description: "AI creative workflow suite",
 };
 
 export default function RootLayout({

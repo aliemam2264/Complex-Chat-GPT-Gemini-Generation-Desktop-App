@@ -1,5 +1,6 @@
 "use client";
 
+import Image from "next/image";
 import Link from "next/link";
 import { useState } from "react";
 
@@ -18,10 +19,16 @@ export function ProjectSidebar() {
     <>
       <aside className="flex h-screen w-[260px] shrink-0 flex-col border-r border-white/[0.08] bg-[#0d0d0d]">
         <div className="w-full border-b border-white/[0.08] px-6 py-7">
-          <Link href="/" className="inline-flex flex-col" aria-label="Go to dashboard">
-            <span className="text-[18px] font-semibold tracking-[-0.04em]">Eskander+</span>
-
-            <span className="mt-2 text-[9px] font-medium tracking-[0.28em] text-[var(--foreground-muted)]">STUDIO</span>
+          <Link href="/" className="inline-flex items-center gap-3" aria-label="Go to dashboard">
+            <Image
+              src="/brand/eplus-icon-white.png"
+              alt="E + AI Suit"
+              width={34}
+              height={34}
+              className="h-8 w-8 rounded-lg object-contain"
+              priority
+            />
+            <span className="text-[18px] font-semibold tracking-[-0.04em]">E + AI Suit</span>
           </Link>
         </div>
         {/* add new Projects */}
