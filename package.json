@@ -1,9 +1,9 @@
 {
   "name": "e-plus-ai-suit",
-  "productName": "E + AI Suit",
+  "productName": "e + AI Suit",
   "version": "0.1.0",
   "description": "Local-first AI image editing studio.",
-  "author": "E + AI Suit",
+  "author": "e + AI Suit",
   "private": true,
   "main": "apps/desktop/dist/main.js",
   "workspaces": [

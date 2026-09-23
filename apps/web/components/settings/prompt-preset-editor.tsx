@@ -14,13 +14,7 @@ type PromptPresetEditorProps = {
   onReset: () => Promise<void>;
 };
 
-export function PromptPresetEditor({
-  preset,
-  saving,
-  resetting,
-  onSave,
-  onReset,
-}: PromptPresetEditorProps) {
+export function PromptPresetEditor({ preset, saving, resetting, onSave, onReset }: PromptPresetEditorProps) {
   const [draft, setDraft] = useState(preset.effectivePrompt);
 
   useEffect(() => {
@@ -30,10 +24,7 @@ export function PromptPresetEditor({
   const normalizedDraft = draft.trim();
   const dirty = normalizedDraft !== preset.effectivePrompt.trim();
   const canSave = normalizedDraft.length > 0 && dirty && !saving && !resetting;
-  const canReset =
-    (preset.isCustomized || normalizedDraft !== preset.defaultPrompt.trim()) &&
-    !saving &&
-    !resetting;
+  const canReset = (preset.isCustomized || normalizedDraft !== preset.defaultPrompt.trim()) && !saving && !resetting;
 
   async function handleSave() {
     if (!canSave) {
@@ -68,9 +59,7 @@ export function PromptPresetEditor({
             </span>
           </div>
 
-          <p className="mt-1 text-xs leading-5 text-[var(--foreground-muted)]">
-            {preset.description}
-          </p>
+          <p className="mt-1 text-xs leading-5 text-[var(--foreground-muted)]">{preset.description}</p>
         </div>
 
         <div className="flex items-center gap-2">
@@ -117,7 +106,7 @@ export function PromptPresetEditor({
         <span>
           {preset.isCustomized
             ? "This user override replaces the hardcoded preset."
-            : "Using the hardcoded preset shipped with E + AI Suit."}
+            : "Using the hardcoded preset shipped with e + AI Suit."}
         </span>
         <span>{draft.length}/6000</span>
       </div>

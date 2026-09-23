@@ -116,6 +116,7 @@ type AssistantState = "IDLE" | "RUNNING" | "READY" | "ERROR";
 type AssistantNodeData = {
   title: string;
   textNodeId: string | null;
+  referenceNodeIds: string[];
   outputText: string;
   state: AssistantState;
   errorMessage: string | null;
@@ -214,7 +215,7 @@ type CanvasEdge = {
   id: string;
   fromId: string;
   toId: string;
-  target: "ASSISTANT_TEXT" | "GENERATOR_PROMPT" | "GENERATOR_SOURCE" | "GENERATOR_REFERENCE";
+  target: "ASSISTANT_TEXT" | "ASSISTANT_REFERENCE" | "GENERATOR_PROMPT" | "GENERATOR_SOURCE" | "GENERATOR_REFERENCE";
   referenceIndex?: number;
 };
 
@@ -240,6 +241,7 @@ type WorkflowTransferNode = {
         type: "ASSISTANT";
         title: string;
         textNodeId: string | null;
+        referenceNodeIds?: string[];
         includeReferences: boolean;
       }
     | {
@@ -314,7 +316,12 @@ function getGeneratorInputPoint(node: CanvasNode, input: GeneratorInput, referen
   return { x: node.x, y: node.y + 176 };
 }
 
-function getAssistantInputPoint(node: CanvasNode) {
+function getAssistantInputPoint(node: CanvasNode, input: "TEXT" | "REFERENCE" = "TEXT", referenceIndex = 0) {
+  if (input === "REFERENCE") {
+    void referenceIndex;
+    return { x: node.x, y: node.y + 126 };
+  }
+
   return { x: node.x, y: node.y + 72 };
 }
 
@@ -433,7 +440,13 @@ function makeRemappedClipboardNodes(sourceNodes: CanvasNode[], offsetX: number, 
 
     if (node.kind === "ASSISTANT") {
       const current = data as AssistantNodeData;
-      data = { ...current, textNodeId: remap(current.textNodeId) };
+      data = {
+        ...current,
+        textNodeId: remap(current.textNodeId),
+        referenceNodeIds: (current.referenceNodeIds ?? [])
+          .map((refId) => remap(refId))
+          .filter((refId): refId is string => Boolean(refId)),
+      };
     } else if (node.kind === "IMAGE_GENERATOR") {
       const current = data as GeneratorNodeData;
       data = {
@@ -556,6 +569,7 @@ function makeGenerationNodes(generation: FlowGeneration, index: number): CanvasN
       data: {
         title: `Assistant #${index + 1}`,
         textNodeId: textId,
+        referenceNodeIds: [],
         outputText: generation.refinedPrompt ?? "",
         state: generation.refinedPrompt ? "READY" : generation.status === "FAILED" ? "ERROR" : "IDLE",
         errorMessage: generation.refinedPrompt ? null : generation.errorMessage,
@@ -703,7 +717,17 @@ function dedupeFlowImageNodes(nodes: CanvasNode[]) {
     if (node.kind === "ASSISTANT") {
       const data = node.data as AssistantNodeData;
       const textNodeId = data.textNodeId ? (nodeIdRemap.get(data.textNodeId) ?? data.textNodeId) : null;
-      return textNodeId === data.textNodeId ? node : { ...node, data: { ...data, textNodeId } };
+      const referenceNodeIds = [
+        ...new Set(
+          (data.referenceNodeIds ?? []).map((referenceNodeId) => nodeIdRemap.get(referenceNodeId) ?? referenceNodeId),
+        ),
+      ].slice(0, 5);
+      const unchangedRefs =
+        referenceNodeIds.length === (data.referenceNodeIds ?? []).length &&
+        referenceNodeIds.every((id, index) => id === (data.referenceNodeIds ?? [])[index]);
+      return textNodeId === data.textNodeId && unchangedRefs
+        ? node
+        : { ...node, data: { ...data, textNodeId, referenceNodeIds } };
     }
 
     if (node.kind !== "IMAGE_GENERATOR") return node;
@@ -858,6 +882,7 @@ function makeStarterPipelineNodes(data: FlowData): CanvasNode[] {
       data: {
         title: "Assistant #1",
         textNodeId: textId,
+        referenceNodeIds: [],
         outputText: "",
         state: "IDLE",
         errorMessage: null,
@@ -1451,7 +1476,8 @@ export function RenderFlowEditor({ projectId, sessionId }: RenderFlowEditorProps
         const targetNode = targetNodeId ? nodeById.get(targetNodeId) : null;
 
         if (targetNode?.kind === "ASSISTANT") {
-          connectAssistantText(targetNode.id);
+          if (targetLabel.startsWith("Reference")) connectAssistantInput(targetNode.id, "REFERENCE");
+          else connectAssistantInput(targetNode.id, "TEXT");
           return;
         }
         if (targetNode?.kind === "IMAGE_GENERATOR") {
@@ -1680,6 +1706,16 @@ export function RenderFlowEditor({ projectId, sessionId }: RenderFlowEditorProps
             target: "ASSISTANT_TEXT",
           });
         }
+
+        (data.referenceNodeIds ?? []).forEach((referenceNodeId, referenceIndex) => {
+          result.push({
+            id: `${referenceNodeId}-${node.id}-assistant-reference-${referenceIndex}`,
+            fromId: referenceNodeId,
+            toId: node.id,
+            target: "ASSISTANT_REFERENCE",
+            referenceIndex,
+          });
+        });
       }
 
       if (node.kind === "IMAGE_GENERATOR") {
@@ -1790,6 +1826,7 @@ export function RenderFlowEditor({ projectId, sessionId }: RenderFlowEditorProps
             type: "ASSISTANT",
             title: data.title,
             textNodeId: data.textNodeId,
+            referenceNodeIds: data.referenceNodeIds ?? [],
             includeReferences: data.includeReferences,
           },
         } satisfies WorkflowTransferNode;
@@ -2152,7 +2189,7 @@ export function RenderFlowEditor({ projectId, sessionId }: RenderFlowEditorProps
     }
 
     if (payload.version !== 1 && payload.version !== WORKFLOW_FILE_VERSION) {
-      throw new Error("This workflow file format is not supported by this version of Eskander Plus Studio.");
+      throw new Error("This workflow file format is not supported by this version of e + AI Suit.");
     }
 
     const offset = findWorkflowPlacementOffset(payload.nodes, mode);
@@ -2195,6 +2232,10 @@ export function RenderFlowEditor({ projectId, sessionId }: RenderFlowEditorProps
           data: {
             title: node.data.title,
             textNodeId: node.data.textNodeId ? (idMap.get(node.data.textNodeId) ?? null) : null,
+            referenceNodeIds: (node.data.referenceNodeIds ?? [])
+              .map((referenceNodeId) => idMap.get(referenceNodeId) ?? null)
+              .filter((referenceNodeId): referenceNodeId is string => Boolean(referenceNodeId))
+              .slice(0, 5),
             outputText: "",
             state: "IDLE",
             errorMessage: null,
@@ -2785,23 +2826,51 @@ export function RenderFlowEditor({ projectId, sessionId }: RenderFlowEditorProps
     setError(null);
   }
 
-  function connectAssistantText(assistantId: string) {
+  function connectAssistantInput(assistantId: string, input: "TEXT" | "REFERENCE") {
     if (!pendingConnection) return;
     const source = nodeById.get(pendingConnection.fromNodeId);
-    if (!source || source.kind !== "TEXT" || pendingConnection.outputType !== "TEXT") {
-      setError("Assistant accepts a Text node as its prompt input.");
-      return;
+
+    if (!source) return;
+
+    if (input === "TEXT") {
+      if (source.kind !== "TEXT" || pendingConnection.outputType !== "TEXT") {
+        setError("Assistant accepts a Text node as its prompt input.");
+        return;
+      }
+
+      updateNode<AssistantNodeData>(assistantId, (data) => ({
+        ...data,
+        textNodeId: source.id,
+        state: "IDLE",
+        outputText: "",
+        errorMessage: null,
+      }));
+    } else {
+      if ((source.kind !== "IMAGE" && source.kind !== "IMAGE_GENERATOR") || pendingConnection.outputType !== "IMAGE") {
+        setError("Assistant reference input accepts an image output.");
+        return;
+      }
+
+      if (source.kind === "IMAGE_GENERATOR" && !(source.data as GeneratorNodeData).outputAsset) {
+        setError("Run that Image Generator first so it has an image output.");
+        return;
+      }
+
+      updateNode<AssistantNodeData>(assistantId, (data) => ({
+        ...data,
+        referenceNodeIds: [...new Set([...(data.referenceNodeIds ?? []), source.id])].slice(0, 5),
+        state: "IDLE",
+        outputText: "",
+        errorMessage: null,
+      }));
     }
 
-    updateNode<AssistantNodeData>(assistantId, (data) => ({
-      ...data,
-      textNodeId: source.id,
-      state: "IDLE",
-      outputText: "",
-      errorMessage: null,
-    }));
     setPendingConnection(null);
     setError(null);
+  }
+
+  function connectAssistantText(assistantId: string) {
+    connectAssistantInput(assistantId, "TEXT");
   }
 
   function connectGeneratorInput(generatorId: string, input: GeneratorInput) {
@@ -2961,6 +3030,7 @@ export function RenderFlowEditor({ projectId, sessionId }: RenderFlowEditorProps
         data: {
           title: nextTitle("ASSISTANT"),
           textNodeId,
+          referenceNodeIds: [],
           outputText: "",
           state: "IDLE",
           errorMessage: null,
@@ -3094,6 +3164,7 @@ export function RenderFlowEditor({ projectId, sessionId }: RenderFlowEditorProps
           data: {
             title: `Assistant #${number}`,
             textNodeId: textId,
+            referenceNodeIds: [],
             outputText: "",
             state: "IDLE",
             errorMessage: null,
@@ -3374,9 +3445,11 @@ export function RenderFlowEditor({ projectId, sessionId }: RenderFlowEditorProps
     setError(null);
 
     try {
-      const references = assistant.includeReferences
-        ? collectReferenceIds(generatorData?.referenceNodeIds ?? [])
-        : { referenceAssetIds: [], referenceImageIds: [] };
+      const directReferenceNodeIds = assistant.referenceNodeIds ?? [];
+      const downstreamReferenceNodeIds = assistant.includeReferences ? (generatorData?.referenceNodeIds ?? []) : [];
+      const references = collectReferenceIds([...directReferenceNodeIds, ...downstreamReferenceNodeIds]);
+      const includeAssistantReferences =
+        references.referenceAssetIds.length > 0 || references.referenceImageIds.length > 0;
       const result = await refinePrompt.mutateAsync({
         projectId,
         sessionId,
@@ -3384,7 +3457,7 @@ export function RenderFlowEditor({ projectId, sessionId }: RenderFlowEditorProps
         instruction,
         preserveMode: generatorData?.preserveMode ?? "STRICT",
         preserveEverythingElse: generatorData?.preserveEverythingElse ?? true,
-        includeReferencesInAssistant: assistant.includeReferences,
+        includeReferencesInAssistant: includeAssistantReferences,
         ...references,
       });
 
@@ -3673,8 +3746,23 @@ export function RenderFlowEditor({ projectId, sessionId }: RenderFlowEditorProps
       .map((item): CanvasNode => {
         if (item.kind === "ASSISTANT") {
           const data = item.data as AssistantNodeData;
-          return data.textNodeId && ids.has(data.textNodeId)
-            ? { ...item, data: { ...data, textNodeId: null, state: "IDLE" as AssistantState, outputText: "" } }
+          const nextReferenceNodeIds = (data.referenceNodeIds ?? []).filter(
+            (referenceNodeId) => !ids.has(referenceNodeId),
+          );
+          const textRemoved = Boolean(data.textNodeId && ids.has(data.textNodeId));
+          const referencesChanged = nextReferenceNodeIds.length !== (data.referenceNodeIds ?? []).length;
+
+          return textRemoved || referencesChanged
+            ? {
+                ...item,
+                data: {
+                  ...data,
+                  textNodeId: textRemoved ? null : data.textNodeId,
+                  referenceNodeIds: nextReferenceNodeIds,
+                  state: "IDLE" as AssistantState,
+                  outputText: "",
+                },
+              }
             : item;
         }
 
@@ -3718,6 +3806,14 @@ export function RenderFlowEditor({ projectId, sessionId }: RenderFlowEditorProps
       updateNode<AssistantNodeData>(edge.toId, (data) => ({
         ...data,
         textNodeId: null,
+        outputText: "",
+        state: "IDLE",
+        errorMessage: null,
+      }));
+    } else if (edge.target === "ASSISTANT_REFERENCE") {
+      updateNode<AssistantNodeData>(edge.toId, (data) => ({
+        ...data,
+        referenceNodeIds: (data.referenceNodeIds ?? []).filter((referenceNodeId) => referenceNodeId !== edge.fromId),
         outputText: "",
         state: "IDLE",
         errorMessage: null,
@@ -4015,10 +4111,12 @@ export function RenderFlowEditor({ projectId, sessionId }: RenderFlowEditorProps
     const data = node.data as AssistantNodeData;
     const running = data.state === "RUNNING";
     const downstreamGenerator = downstreamGeneratorForAssistant(node.id);
-    const referenceCount =
+    const directReferenceCount = (data.referenceNodeIds ?? []).length;
+    const downstreamReferenceCount =
       downstreamGenerator?.kind === "IMAGE_GENERATOR"
         ? (downstreamGenerator.data as GeneratorNodeData).referenceNodeIds.length
         : 0;
+    const referenceCount = directReferenceCount + (data.includeReferences ? downstreamReferenceCount : 0);
 
     return nodeShell(
       node,
@@ -4088,34 +4186,6 @@ export function RenderFlowEditor({ projectId, sessionId }: RenderFlowEditorProps
               type="button"
               onClick={(event) => {
                 event.stopPropagation();
-                updateNode<AssistantNodeData>(node.id, (current) => ({
-                  ...current,
-                  includeReferences: !current.includeReferences,
-                  state: "IDLE",
-                }));
-              }}
-              className="flex h-9 items-center gap-2 rounded-lg bg-white/[0.04] px-3 text-[13px] text-white/66 hover:bg-white/[0.07]"
-              title="Off by default. When enabled, ChatGPT also analyzes the references connected to the downstream generator. Gemini always receives the references directly."
-            >
-              <span
-                className={[
-                  "relative h-4 w-7 rounded-full transition",
-                  data.includeReferences ? "bg-[#705cff]" : "bg-white/[0.13]",
-                ].join(" ")}
-              >
-                <span
-                  className={[
-                    "absolute top-[2px] h-3 w-3 rounded-full bg-white transition",
-                    data.includeReferences ? "left-[12px]" : "left-[2px]",
-                  ].join(" ")}
-                />
-              </span>
-              Analyze refs{referenceCount > 0 ? ` (${referenceCount})` : ""}
-            </button>
-            <button
-              type="button"
-              onClick={(event) => {
-                event.stopPropagation();
                 router.push("/settings");
               }}
               className="flex h-9 w-9 items-center justify-center rounded-lg text-white/42 hover:bg-white/[0.05] hover:text-white/72"
@@ -4173,7 +4243,20 @@ export function RenderFlowEditor({ projectId, sessionId }: RenderFlowEditorProps
           label: "Text input",
           onClick: (event) => {
             event.stopPropagation();
-            connectAssistantText(node.id);
+            connectAssistantInput(node.id, "TEXT");
+          },
+        })}
+        {renderPort({
+          node,
+          side: "LEFT",
+          top: 108,
+          type: "IMAGE",
+          label: `Reference input (${directReferenceCount}/5)`,
+          miniLabel: "REF",
+          miniLabelTone: "reference",
+          onClick: (event) => {
+            event.stopPropagation();
+            connectAssistantInput(node.id, "REFERENCE");
           },
         })}
         {renderPort({
@@ -4784,7 +4867,7 @@ export function RenderFlowEditor({ projectId, sessionId }: RenderFlowEditorProps
             <span className="flex h-5 w-5 items-center justify-center rounded-[5px] bg-gradient-to-br from-orange-300 to-pink-500 text-[13px] text-black/80">
               E
             </span>
-            <span className="max-w-[220px] truncate text-white/62">Eskander Plus Studio</span>
+            <span className="max-w-[220px] truncate text-white/62">e+ AI Suit</span>
             <span className="text-white/20">›</span>
             <Link2 size={13} className="text-white/30" />
             <span className="max-w-[260px] truncate text-white/75">{flowData.session.name}</span>
@@ -4927,12 +5010,17 @@ export function RenderFlowEditor({ projectId, sessionId }: RenderFlowEditorProps
 
               const start = getNodeOutputPoint(from);
               let end;
-              if (edge.target === "ASSISTANT_TEXT") end = getAssistantInputPoint(to);
+              if (edge.target === "ASSISTANT_TEXT") end = getAssistantInputPoint(to, "TEXT");
+              else if (edge.target === "ASSISTANT_REFERENCE")
+                end = getAssistantInputPoint(to, "REFERENCE", edge.referenceIndex ?? 0);
               else if (edge.target === "GENERATOR_PROMPT") end = getGeneratorInputPoint(to, "PROMPT");
               else if (edge.target === "GENERATOR_SOURCE") end = getGeneratorInputPoint(to, "SOURCE");
               else end = getGeneratorInputPoint(to, "REFERENCE", edge.referenceIndex ?? 0);
 
-              const imageEdge = edge.target === "GENERATOR_SOURCE" || edge.target === "GENERATOR_REFERENCE";
+              const imageEdge =
+                edge.target === "ASSISTANT_REFERENCE" ||
+                edge.target === "GENERATOR_SOURCE" ||
+                edge.target === "GENERATOR_REFERENCE";
 
               const path = curvePath(start.x, start.y, end.x, end.y);
 

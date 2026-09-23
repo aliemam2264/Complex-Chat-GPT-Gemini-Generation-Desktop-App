@@ -27,10 +27,7 @@ export default function DashboardPage() {
     setSelectedProjectIds((current) => {
       const next = current.filter((id) => validIds.has(id));
 
-      if (
-        next.length === current.length &&
-        next.every((id, index) => id === current[index])
-      ) {
+      if (next.length === current.length && next.every((id, index) => id === current[index])) {
         return current;
       }
 
@@ -147,7 +144,7 @@ export default function DashboardPage() {
 
           <div className="relative mx-auto w-full max-w-[1040px] px-10 py-10">
             <header>
-              <p className="text-xs font-medium uppercase tracking-[0.16em] text-[#9d8b73]">E + AI Suit</p>
+              <p className="text-xs font-medium uppercase tracking-[0.16em] text-[#9d8b73]">e + AI Suit</p>
 
               <h1 className="mt-3 text-[30px] font-medium tracking-[-0.035em]">Dashboard</h1>
 

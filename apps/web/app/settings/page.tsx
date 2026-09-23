@@ -9,11 +9,7 @@ import { ProviderCard } from "@/components/settings/provider-card";
 import { PromptPresetEditor } from "@/components/settings/prompt-preset-editor";
 
 import { useGenerationDefaults } from "@/hooks/use-generation-defaults";
-import {
-  usePromptPresets,
-  useResetPromptPreset,
-  useSavePromptPreset,
-} from "@/hooks/use-prompt-presets";
+import { usePromptPresets, useResetPromptPreset, useSavePromptPreset } from "@/hooks/use-prompt-presets";
 
 import {
   useGenerationRuntimeSettings,
@@ -216,7 +212,7 @@ export default function SettingsPage() {
             <div>
               <h1 className="text-sm font-medium">Settings</h1>
 
-              <p className="mt-0.5 text-xs text-[var(--foreground-subtle)]">Configure E + AI Suit</p>
+              <p className="mt-0.5 text-xs text-[var(--foreground-subtle)]">Configure e + AI Suit</p>
             </div>
           </div>
         </header>
@@ -292,7 +288,9 @@ export default function SettingsPage() {
                   <span
                     className={[
                       "h-5 w-5 rounded-full bg-white shadow-sm transition-transform",
-                      preserveMode !== "NO_RESTRICTION" && preserveEverythingElse ? "translate-x-[22px]" : "translate-x-0.5",
+                      preserveMode !== "NO_RESTRICTION" && preserveEverythingElse
+                        ? "translate-x-[22px]"
+                        : "translate-x-0.5",
                     ].join(" ")}
                   />
                 </button>
@@ -310,7 +308,7 @@ export default function SettingsPage() {
                 </div>
 
                 <p className="mt-1 max-w-2xl text-xs leading-5 text-[var(--foreground-muted)]">
-                  Customize the instruction E + AI Suit adds for each edit mode. Reset to Default removes the user
+                  Customize the instruction e + AI Suit adds for each edit mode. Reset to Default removes the user
                   override and immediately returns that mode to its hardcoded prompt.
                 </p>
               </div>
@@ -337,9 +335,7 @@ export default function SettingsPage() {
 
             {promptPresetError && (
               <div className="mt-3 rounded-xl border border-red-500/30 bg-red-500/5 px-4 py-3 text-xs text-red-500">
-                {promptPresetError instanceof Error
-                  ? promptPresetError.message
-                  : "Could not update prompt presets."}
+                {promptPresetError instanceof Error ? promptPresetError.message : "Could not update prompt presets."}
               </div>
             )}
           </section>

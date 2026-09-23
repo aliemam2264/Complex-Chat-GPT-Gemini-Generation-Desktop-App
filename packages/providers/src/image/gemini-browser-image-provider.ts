@@ -104,6 +104,7 @@ export class GeminiBrowserImageProvider implements ImageProvider {
 
       const context = await chromium.launchPersistentContext(this.userDataDirectory, {
         executablePath,
+        acceptDownloads: true,
         // Keep automation fully backgrounded; manual login remains headed.
         headless: true,
 
@@ -2368,26 +2369,15 @@ ${prompt}
       if (
         networkCandidate &&
         this.isLikelyFullResolutionNetworkCandidate(networkCandidate) &&
-        Date.now() - networkCandidate.capturedAt >= 6_000
+        Date.now() - networkCandidate.capturedAt >= 6_000 &&
+        Date.now() - startedAt >= 45_000 &&
+        !generatedCandidate
       ) {
         console.log(
-          `[Gemini] Using stable network image candidate after ${Math.round(
-            (Date.now() - networkCandidate.capturedAt) / 1000,
-          )}s.`,
+          `[Gemini] Full-size download control not visible yet; keeping network candidate as a late fallback (${Math.round(
+            networkCandidate.byteLength / 1024,
+          )} KB).`,
         );
-
-        return {
-          downloadButton: null,
-          image: null,
-          snapshot: {
-            buffer: networkCandidate.buffer,
-            mimeType: networkCandidate.mimeType,
-            extension: networkCandidate.extension,
-            width: networkCandidate.width,
-            height: networkCandidate.height,
-          },
-          detectedBy: "network-image",
-        };
       }
 
       const downloadButtons = this.getDownloadButtons(page);
@@ -2408,31 +2398,10 @@ ${prompt}
            * generation is complete, so there is no need to wait for the normal
            * stability grace period here.
            */
-          const buttonCandidate =
-            generatedCandidate ?? (await this.findNewGeneratedImage(page, initialImageSignatures, true));
-
-          if (buttonCandidate) {
-            generatedCandidate = buttonCandidate;
-          }
-
-          let snapshot = buttonCandidate ? await this.captureGeneratedImageSnapshot(page, buttonCandidate) : null;
-
-          const latestNetworkCandidate = networkCapture?.getBest() ?? null;
-
-          if (latestNetworkCandidate) {
-            const networkSnapshot = this.networkCandidateToSnapshot(latestNetworkCandidate);
-
-            if (this.isBetterSnapshot(networkSnapshot, snapshot)) {
-              snapshot = networkSnapshot;
-
-              console.log("[Gemini] Download button path preferred the better network image bytes.");
-            }
-          }
-
           return {
             downloadButton,
-            image: buttonCandidate?.image ?? null,
-            snapshot,
+            image: null,
+            snapshot: null,
             detectedBy: "download-button",
           };
         }
@@ -2468,18 +2437,16 @@ ${prompt}
         const downloadButton = await this.findLastVisibleDownloadButton(page);
 
         if (downloadButton) {
-          const snapshot = await this.captureGeneratedImageSnapshot(page, detectedCandidate);
-
           return {
             downloadButton,
-            image: detectedCandidate.image,
-            snapshot,
-            detectedBy: "generated-image",
+            image: null,
+            snapshot: null,
+            detectedBy: "download-button",
           };
         }
 
         const stableFor = candidateDetectedAt === null ? 0 : Date.now() - candidateDetectedAt;
-        const requiredStableMs = detectedCandidate.scopedToModelResponse ? 5_000 : GENERATED_IMAGE_DOWNLOAD_GRACE_MS;
+        const requiredStableMs = GENERATED_IMAGE_DOWNLOAD_GRACE_MS;
 
         if (stableFor >= requiredStableMs) {
           let snapshot = await this.captureGeneratedImageSnapshot(page, detectedCandidate);
@@ -2544,13 +2511,7 @@ ${prompt}
       return {
         downloadButton: null,
         image: null,
-        snapshot: {
-          buffer: finalNetworkCandidate.buffer,
-          mimeType: finalNetworkCandidate.mimeType,
-          extension: finalNetworkCandidate.extension,
-          width: finalNetworkCandidate.width,
-          height: finalNetworkCandidate.height,
-        },
+        snapshot: this.networkCandidateToSnapshot(finalNetworkCandidate),
         detectedBy: "network-image",
       };
     }
@@ -2877,116 +2838,130 @@ ${input.prompt}`
         });
 
         try {
-          const [download] = await Promise.all([
-            page.waitForEvent("download", {
-              timeout: 20_000,
-            }),
+          console.log("[Gemini] Clicking Gemini real download button...");
 
-            detection.downloadButton.click({
-              force: true,
-              timeout: 5000,
-            }),
-          ]);
-
-          const suggestedName = download.suggestedFilename();
-          const extension = extname(suggestedName) || ".png";
-          const fileName = `generated-${Date.now()}-${randomUUID().slice(0, 8)}${extension}`;
-          const absolutePath = join(input.outputDirectory, basename(fileName));
-
-          await download.saveAs(absolutePath);
-
-          console.log("[Gemini] Result downloaded:", absolutePath);
-
-          return {
-            absolutePath,
-            fileName,
-            mimeType: this.getMimeType(extension),
+          type GeminiDownloadResponse = {
+            buffer: Buffer;
+            mimeType: string;
+            fileName: string;
           };
-        } catch (error) {
-          console.warn("[Gemini] Download control did not produce a file. Trying generated-image fallback:", error);
 
-          /*
-           * Current Gemini builds do not always surface a browser download
-           * event for the full-size control. The click can still finish the
-           * media request (or leave the final <img> in the DOM). Give that
-           * state a short moment to settle, then recover from network/DOM
-           * bytes instead of failing the whole generation.
-           */
-          await page.waitForTimeout(1_500).catch(() => undefined);
+          const responsePromise: Promise<GeminiDownloadResponse | null> = page
+            .waitForResponse(
+              async (response) => {
+                try {
+                  const request = response.request();
 
-          const postClickNetworkCandidate = networkCapture?.getBest() ?? null;
+                  if (request.method() !== "GET" || !response.ok()) {
+                    return false;
+                  }
 
-          if (postClickNetworkCandidate) {
-            console.log("[Gemini] Recovering generated image from network bytes after download-event failure.");
+                  const headers = response.headers();
+                  const contentType = headers["content-type"]?.split(";")[0]?.trim().toLowerCase() ?? "";
 
-            return this.saveGeneratedImageFallback(
-              page,
-              null,
-              {
-                buffer: postClickNetworkCandidate.buffer,
-                mimeType: postClickNetworkCandidate.mimeType,
-                extension: postClickNetworkCandidate.extension,
-                width: postClickNetworkCandidate.width,
-                height: postClickNetworkCandidate.height,
+                  if (!contentType.startsWith("image/")) {
+                    return false;
+                  }
+
+                  return true;
+                } catch {
+                  return false;
+                }
               },
-              input.outputDirectory,
-            );
+              {
+                timeout: 60_000,
+              },
+            )
+            .then(async (response) => {
+              const headers = response.headers();
+              const contentType = headers["content-type"]?.split(";")[0]?.trim().toLowerCase() || "image/png";
+              const body = await response.body();
+
+              if (body.byteLength < 120_000) {
+                return null;
+              }
+
+              const contentDisposition = headers["content-disposition"] ?? "";
+              const dispositionName =
+                contentDisposition.match(/filename\*=UTF-8''([^;]+)/i)?.[1] ??
+                contentDisposition.match(/filename="?([^"]+)"?/i)?.[1] ??
+                "";
+
+              const extension = this.getExtensionFromMimeType(contentType);
+              const fileName =
+                basename(decodeURIComponent(dispositionName || "").trim()) || `gemini-${Date.now()}${extension}`;
+
+              return {
+                buffer: body,
+                mimeType: contentType,
+                fileName,
+              };
+            })
+            .catch(() => null);
+
+          const downloadPromise = page
+            .waitForEvent("download", {
+              timeout: 60_000,
+            })
+            .catch(() => null);
+
+          await detection.downloadButton.click({
+            force: true,
+            timeout: 10_000,
+          });
+
+          const download = await downloadPromise;
+
+          if (download) {
+            const suggestedName = basename(download.suggestedFilename()?.trim() || `gemini-${Date.now()}.png`);
+            const absolutePath = join(input.outputDirectory, suggestedName);
+
+            await download.saveAs(absolutePath);
+
+            console.log("[Gemini] Result downloaded from Gemini button:", absolutePath);
+
+            return {
+              absolutePath,
+              fileName: suggestedName,
+              mimeType: this.getMimeType(extname(suggestedName) || ".png"),
+            };
           }
 
-          const postClickImage = await this.findNewGeneratedImage(page, initialImageSignatures, true);
+          const downloadedResponse = await responsePromise;
 
-          if (postClickImage) {
-            const postClickSnapshot = await this.captureGeneratedImageSnapshot(page, postClickImage);
+          if (downloadedResponse) {
+            const fileName = basename(downloadedResponse.fileName);
+            const absolutePath = join(input.outputDirectory, fileName);
 
-            console.log("[Gemini] Recovering generated image from DOM after download-event failure.");
+            await writeFile(absolutePath, downloadedResponse.buffer);
 
-            return this.saveGeneratedImageFallback(
-              page,
-              postClickImage.image,
-              postClickSnapshot,
-              input.outputDirectory,
-            );
+            console.log("[Gemini] Result saved from Gemini download network response:", absolutePath);
+
+            return {
+              absolutePath,
+              fileName,
+              mimeType: downloadedResponse.mimeType,
+            };
           }
+
+          throw new Error("Gemini download button did not produce a browser download or a full-size image response.");
+        } catch (error) {
+          console.error("[Gemini] Gemini real download button did not produce a downloadable full-size file.", error);
+
+          throw new Error(
+            "Gemini generated the image, but the full-size download button did not produce a downloadable file. Refusing to save preview/low-quality fallback.",
+          );
         }
       }
 
       if (detection.image || detection.snapshot) {
-        return this.saveGeneratedImageFallback(page, detection.image, detection.snapshot, input.outputDirectory);
-      }
-
-      /*
-       * One final recovery scan protects against a race where the Download
-       * control was detected first and disappeared before Playwright could
-       * observe a download. This is intentionally done only after the normal
-       * detection/download paths have been exhausted.
-       */
-      const finalNetworkCandidate = networkCapture?.getBest() ?? null;
-
-      if (finalNetworkCandidate) {
-        return this.saveGeneratedImageFallback(
-          page,
-          null,
-          {
-            buffer: finalNetworkCandidate.buffer,
-            mimeType: finalNetworkCandidate.mimeType,
-            extension: finalNetworkCandidate.extension,
-            width: finalNetworkCandidate.width,
-            height: finalNetworkCandidate.height,
-          },
-          input.outputDirectory,
+        throw new Error(
+          "Gemini generated an image, but the full-size download button was not detected. Refusing to save preview/low-quality fallback.",
         );
       }
 
-      const finalImageCandidate = await this.findNewGeneratedImage(page, initialImageSignatures, true);
-
-      if (finalImageCandidate) {
-        const finalSnapshot = await this.captureGeneratedImageSnapshot(page, finalImageCandidate);
-
-        return this.saveGeneratedImageFallback(page, finalImageCandidate.image, finalSnapshot, input.outputDirectory);
-      }
-
       throw new Error(
-        "Gemini finished, but the generated image could not be downloaded or captured from the final result.",
+        "Gemini generated an image, but no real full-size download was captured. Refusing to save preview/low-quality fallback.",
       );
     } finally {
       networkCapture?.stop();

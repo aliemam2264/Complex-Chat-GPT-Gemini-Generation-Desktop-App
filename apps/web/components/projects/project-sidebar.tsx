@@ -22,13 +22,13 @@ export function ProjectSidebar() {
           <Link href="/" className="inline-flex items-center gap-3" aria-label="Go to dashboard">
             <Image
               src="/brand/eplus-icon-white.png"
-              alt="E + AI Suit"
+              alt="e + AI Suit"
               width={34}
               height={34}
               className="h-8 w-8 rounded-lg object-contain"
               priority
             />
-            <span className="text-[18px] font-semibold tracking-[-0.04em]">E + AI Suit</span>
+            <span className="text-[18px] font-semibold tracking-[-0.04em]">e + AI Suit</span>
           </Link>
         </div>
         {/* add new Projects */}

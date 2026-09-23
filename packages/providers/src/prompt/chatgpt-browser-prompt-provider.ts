@@ -1849,6 +1849,7 @@ No. You may make supporting adjustments only if they are necessary to fulfill th
         ? `
 ATTACHED IMAGE ROLES:
 - The FIRST attached image is the SOURCE IMAGE that the downstream image model will edit.
+- Analyze the SOURCE IMAGE itself carefully and use its real visible details in the final prompt.
 - The next ${referenceCount} attached image${referenceCount === 1 ? " is" : "s are"} VISUAL REFERENCE IMAGE${referenceCount === 1 ? "" : "S"} only.
 - Analyze the reference image${referenceCount === 1 ? "" : "s"} silently and use only the relevant visual characteristics to improve the final text prompt.
 - Do NOT treat a reference image as the main image to edit.
@@ -1868,6 +1869,9 @@ You are writing the final image-editing prompt that will be sent to the selected
 Your job is to inspect the uploaded source image${referenceCount > 0 ? " and visual references" : ""}, reason silently about them, and convert the user's request into one clean, precise TEXT prompt.
 
 IMPORTANT RULES:
+- You MUST visually inspect the FIRST attached image before writing the final prompt.
+- Base the final prompt on BOTH the user's written request and the real visible content of the source image.
+- If the source image contains important subject, product, pose, layout, text, lighting, framing, material, or scene context, incorporate only the relevant details directly into the final prompt.
 - Respect the actual content of the source image.
 - Do NOT assume the image is architectural unless it is clearly an architectural render or the user asks for architectural changes.
 - If the image is a logo, graphic, poster, product shot, portrait, illustration, or any non-architectural image, treat it accordingly.
@@ -2042,6 +2046,95 @@ FINAL REMINDER: reply with the prompt TEXT ONLY. Do not create or edit an image 
       .catch(() => "");
   }
 
+  private async readLatestAssistantDomCandidate(page: Page): Promise<string> {
+    return page
+      .evaluate(() => {
+        const selectors = [
+          '[data-message-author-role="assistant"]',
+          '[data-turn="assistant"]',
+          '[data-testid*="assistant" i]',
+          '[data-testid^="conversation-turn-"]',
+          'article',
+        ];
+
+        const isVisible = (element: Element) => {
+          const html = element as HTMLElement;
+          const rect = html.getBoundingClientRect();
+          const style = window.getComputedStyle(html);
+          return rect.width > 0 && rect.height > 0 && style.display !== "none" && style.visibility !== "hidden";
+        };
+
+        const looksLikeOriginalUserPrompt = (text: string) => {
+          const lower = text.toLowerCase();
+          return (
+            lower.includes("text-only prompt-writer mode") ||
+            lower.includes("final reminder: reply with the prompt text only") ||
+            lower.includes("do not generate, edit, transform, or return an image") ||
+            lower.includes("write a concise but strong final edit prompt")
+          );
+        };
+
+        const elements = selectors.flatMap((selector) => Array.from(document.querySelectorAll(selector)));
+        const uniqueElements = [...new Set(elements)].filter(isVisible);
+        const candidates: string[] = [];
+
+        for (const element of uniqueElements) {
+          const html = element as HTMLElement;
+          const descriptor = [
+            html.getAttribute("data-message-author-role") ?? "",
+            html.getAttribute("data-turn") ?? "",
+            html.getAttribute("data-testid") ?? "",
+            html.getAttribute("class") ?? "",
+          ]
+            .join(" ")
+            .toLowerCase();
+
+          const hasExplicitUserRole = Boolean(html.querySelector('[data-message-author-role="user"], [data-turn="user"]'));
+          const hasExplicitAssistantRole =
+            descriptor.includes("assistant") ||
+            Boolean(html.querySelector('[data-message-author-role="assistant"], [data-turn="assistant"]'));
+
+          if (hasExplicitUserRole && !hasExplicitAssistantRole) {
+            continue;
+          }
+
+          const text = (html.innerText || html.textContent || "")
+            .replace(/\n{3,}/g, "\n\n")
+            .trim();
+
+          if (text.length < 30 || looksLikeOriginalUserPrompt(text)) {
+            continue;
+          }
+
+          candidates.push(text);
+        }
+
+        return candidates.at(-1) ?? "";
+      })
+      .catch(() => "");
+  }
+
+  private async assistantTurnHasLargeVisualOutput(candidate: Locator): Promise<boolean> {
+    return candidate
+      .locator("img")
+      .evaluateAll((images) =>
+        images.some((element) => {
+          const image = element as HTMLImageElement;
+          const rect = image.getBoundingClientRect();
+          const style = window.getComputedStyle(image);
+          const source = image.currentSrc || image.src || "";
+
+          if (style.display === "none" || style.visibility === "hidden") return false;
+          if (rect.width < 160 || rect.height < 160) return false;
+          if (/avatar|profile|emoji|icon|logo|favicon/i.test(source)) return false;
+
+          const naturalLongEdge = Math.max(image.naturalWidth || 0, image.naturalHeight || 0);
+          return naturalLongEdge >= 320 || rect.width >= 260 || rect.height >= 260;
+        }),
+      )
+      .catch(() => false);
+  }
+
   private async waitForAssistantResponse(
     page: Page,
     initialAssistantCount: number,
@@ -2117,9 +2210,8 @@ FINAL REMINDER: reply with the prompt TEXT ONLY. Do not create or edit an image 
       if (turnCount >= initialTurnCount + 2) {
         const candidate = turns.last();
         const candidateText = (await candidate.innerText().catch(() => "")).trim();
-        const imageCount = await candidate.locator("img").count().catch(() => 0);
 
-        latestAssistantTurnHasVisualOutput = imageCount > 0;
+        latestAssistantTurnHasVisualOutput = await this.assistantTurnHasLargeVisualOutput(candidate);
 
         if (!text && candidateText.length > 30) {
           text = candidateText;
@@ -2139,6 +2231,15 @@ FINAL REMINDER: reply with the prompt TEXT ONLY. Do not create or edit an image 
         if (apiText.length > 30 && apiText !== initialAssistantText) {
           text = apiText;
           source = "conversation-api";
+        }
+      }
+
+      if (!text) {
+        const domText = await this.readLatestAssistantDomCandidate(page);
+
+        if (domText.length > 30 && domText !== initialAssistantText) {
+          text = domText;
+          source = "dom-broad";
         }
       }
 
@@ -2181,7 +2282,7 @@ FINAL REMINDER: reply with the prompt TEXT ONLY. Do not create or edit an image 
           console.log(`[ChatGPT] Response candidate detected via ${source}.`);
         }
 
-        if (stableIterations >= 2 && !generating) {
+        if (stableIterations >= 2 && (!generating || stableIterations >= 8)) {
           console.log(`[ChatGPT] Prompt result received via ${source}.`);
           return text;
         }
@@ -2332,7 +2433,7 @@ FINAL REMINDER: reply with the prompt TEXT ONLY. Do not create or edit an image 
         message: "ChatGPT is analyzing the render and building the prompt...",
       });
 
-      const responseTimeoutMs = referenceImages.length > 0 ? 210_000 : 90_000;
+      const responseTimeoutMs = referenceImages.length > 0 ? 240_000 : 150_000;
 
       let response: string;
 

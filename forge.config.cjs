@@ -4,13 +4,13 @@ module.exports = {
   packagerConfig: {
     asar: true,
     executableName: "EPlusAISuit",
-    appCopyright: "Copyright (c) E + AI Suit",
+    appCopyright: "Copyright (c) e + AI Suit",
     win32metadata: {
-      CompanyName: "E + AI Suit",
-      FileDescription: "E + AI Suit desktop application",
+      CompanyName: "e + AI Suit",
+      FileDescription: "e + AI Suit desktop application",
       InternalName: "EPlusAISuit",
       OriginalFilename: "EPlusAISuit.exe",
-      ProductName: "E + AI Suit",
+      ProductName: "e + AI Suit",
     },
     icon: path.resolve(__dirname, "assets", "icon.ico"),
     extraResource: [
@@ -40,7 +40,7 @@ module.exports = {
       name: "@electron-forge/maker-squirrel",
       config: {
         name: "EPlusAISuit",
-        authors: "E + AI Suit",
+        authors: "e + AI Suit",
         description: "Local-first AI image editing studio.",
         setupExe: "EPlusAISuit-Setup.exe",
         setupIcon: path.resolve(__dirname, "assets", "icon.ico"),

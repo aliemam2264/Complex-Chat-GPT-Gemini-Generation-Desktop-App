@@ -4,15 +4,7 @@ import { mkdir, writeFile } from "node:fs/promises";
 import { createServer } from "node:net";
 import { extname, join } from "node:path";
 
-import {
-  app,
-  BrowserWindow,
-  clipboard,
-  dialog,
-  ipcMain,
-  nativeImage,
-  net,
-} from "electron";
+import { app, BrowserWindow, clipboard, dialog, ipcMain, nativeImage, net } from "electron";
 
 // Squirrel lifecycle events only exist in the installed Windows build.
 // Do not load electron-squirrel-startup during local development.
@@ -59,7 +51,10 @@ async function downloadImageBuffer(imageUrl: string) {
 function sanitizeImageFileName(fileName: string) {
   const fallback = "eskander-render.png";
   const trimmed = fileName?.trim() || fallback;
-  const cleaned = trimmed.replace(/[<>:"/\|?*]+/g, "-").replace(/\s+/g, " ").trim();
+  const cleaned = trimmed
+    .replace(/[<>:"/\|?*]+/g, "-")
+    .replace(/\s+/g, " ")
+    .trim();
   const base = cleaned || fallback;
   const extension = extname(base);
 
@@ -90,36 +85,33 @@ async function stageDragImageFile(imageUrl: string, fileName: string) {
   };
 }
 
-ipcMain.handle(
-  "image:save",
-  async (_event, imageUrl: string, fileName: string) => {
-    const result = await dialog.showSaveDialog({
-      title: "Save Image",
-      defaultPath: fileName || "eskander-render.png",
-      filters: [
-        {
-          name: "Images",
-          extensions: ["png", "jpg", "jpeg", "webp"],
-        },
-      ],
-    });
+ipcMain.handle("image:save", async (_event, imageUrl: string, fileName: string) => {
+  const result = await dialog.showSaveDialog({
+    title: "Save Image",
+    defaultPath: fileName || "eskander-render.png",
+    filters: [
+      {
+        name: "Images",
+        extensions: ["png", "jpg", "jpeg", "webp"],
+      },
+    ],
+  });
 
-    if (result.canceled || !result.filePath) {
-      return {
-        success: false,
-        canceled: true,
-      };
-    }
-
-    const buffer = await downloadImageBuffer(imageUrl);
-    await writeFile(result.filePath, buffer);
-
+  if (result.canceled || !result.filePath) {
     return {
-      success: true,
-      filePath: result.filePath,
+      success: false,
+      canceled: true,
     };
-  },
-);
+  }
+
+  const buffer = await downloadImageBuffer(imageUrl);
+  await writeFile(result.filePath, buffer);
+
+  return {
+    success: true,
+    filePath: result.filePath,
+  };
+});
 
 ipcMain.handle("image:copy", async (_event, imageUrl: string) => {
   const buffer = await downloadImageBuffer(imageUrl);
@@ -135,7 +127,6 @@ ipcMain.handle("image:copy", async (_event, imageUrl: string) => {
     success: true,
   };
 });
-
 
 ipcMain.handle("image:prepare-drag", async (_event, imageUrl: string, fileName: string) => {
   const prepared = await stageDragImageFile(imageUrl, fileName);
@@ -225,18 +216,10 @@ async function waitForUrl(url: string, timeoutMs = 60_000) {
     await new Promise((resolve) => setTimeout(resolve, 350));
   }
 
-  throw new Error(
-    `Timed out waiting for ${url}${
-      lastError instanceof Error ? `: ${lastError.message}` : ""
-    }`,
-  );
+  throw new Error(`Timed out waiting for ${url}${lastError instanceof Error ? `: ${lastError.message}` : ""}`);
 }
 
-function pipeProcessLogs(
-  child: ChildProcess,
-  log: WriteStream,
-  prefix: string,
-) {
+function pipeProcessLogs(child: ChildProcess, log: WriteStream, prefix: string) {
   child.stdout?.on("data", (chunk: Buffer | string) => {
     const text = chunk.toString();
     log.write(text);
@@ -282,7 +265,7 @@ async function spawnNodeRuntime(
   });
 
   child.on("error", (error) => {
-    log.write(`\n[error] ${error instanceof Error ? error.stack ?? error.message : String(error)}\n`);
+    log.write(`\n[error] ${error instanceof Error ? (error.stack ?? error.message) : String(error)}\n`);
     console.error(`[${prefix}] Runtime process error:`, error);
   });
 
@@ -290,17 +273,12 @@ async function spawnNodeRuntime(
     log.write(`\n[exit] code=${String(code)} signal=${String(signal)}\n`);
 
     if (!isQuitting) {
-      console.error(
-        `${prefix} exited unexpectedly with code ${String(code)} and signal ${String(signal)}.`,
-      );
+      console.error(`${prefix} exited unexpectedly with code ${String(code)} and signal ${String(signal)}.`);
 
       if (!runtimeFailureShown) {
         runtimeFailureShown = true;
 
-        dialog.showErrorBox(
-          "E + AI Suit service stopped",
-          `${prefix} stopped unexpectedly. Restart E + AI Suit.`,
-        );
+        dialog.showErrorBox("e + AI Suit service stopped", `${prefix} stopped unexpectedly. Restart e + AI Suit.`);
 
         app.quit();
       }
@@ -325,14 +303,10 @@ async function terminateProcess(child: ChildProcess | null) {
 
   if (process.platform === "win32" && child.pid) {
     await new Promise<void>((resolve) => {
-      const killer = spawn(
-        "taskkill",
-        ["/pid", String(child.pid), "/T", "/F"],
-        {
-          windowsHide: true,
-          stdio: "ignore",
-        },
-      );
+      const killer = spawn("taskkill", ["/pid", String(child.pid), "/T", "/F"], {
+        windowsHide: true,
+        stdio: "ignore",
+      });
 
       killer.once("exit", () => resolve());
       killer.once("error", () => resolve());
@@ -343,10 +317,7 @@ async function terminateProcess(child: ChildProcess | null) {
 }
 
 async function stopProductionServices() {
-  await Promise.allSettled([
-    terminateProcess(runtime.webProcess),
-    terminateProcess(runtime.apiProcess),
-  ]);
+  await Promise.allSettled([terminateProcess(runtime.webProcess), terminateProcess(runtime.apiProcess)]);
 
   runtime.webLog?.end();
   runtime.apiLog?.end();
@@ -437,7 +408,7 @@ function createMainWindow(webUrl: string, apiUrl: string) {
     minWidth: 1180,
     minHeight: 720,
     backgroundColor: "#0A0A0A",
-    title: "E + AI Suit",
+    title: "e + AI Suit",
     icon: getAppIconPath(),
     show: false,
     webPreferences: {
@@ -488,10 +459,10 @@ if (!hasSingleInstanceLock) {
         );
       }
     } catch (error) {
-      console.error("Failed to start E + AI Suit:", error);
+      console.error("Failed to start e + AI Suit:", error);
 
       dialog.showErrorBox(
-        "E + AI Suit could not start",
+        "e + AI Suit could not start",
         error instanceof Error ? error.message : "Unknown startup error.",
       );
 
